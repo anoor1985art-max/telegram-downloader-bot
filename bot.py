@@ -377,12 +377,12 @@ def run_bot_polling():
             print(f"[ERROR] Bot polling restart due to: {e}")
             time.sleep(5)
 
+# تشغيل البوت في مسار منفصل (Background Thread) ليعمل سواء عبر python مباشرة أو عبر gunicorn في السحابة
+polling_thread = threading.Thread(target=run_bot_polling, daemon=True)
+polling_thread.start()
+
 if __name__ == "__main__":
     print("[INFO] Universal Downloader Bot is starting... Connected to Telegram successfully.")
-    # تشغيل البوت في مسار منفصل (Background Thread) لكي لا يتعارض مع خادم الويب
-    polling_thread = threading.Thread(target=run_bot_polling, daemon=True)
-    polling_thread.start()
-    
     # تشغيل خادم الويب على المنفذ المطلوب في Render (أو 8080 محلياً)
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)

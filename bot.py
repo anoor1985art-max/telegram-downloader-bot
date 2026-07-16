@@ -34,6 +34,7 @@ FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 # الترحيب والقوائم التفاعلية
 # ==========================================
 @bot.message_handler(commands=['start', 'help'])
+@bot.message_handler(func=lambda message: message.text and message.text.strip().lower() in ['start', 'help', 'مرحبا', 'أهلا', 'اهلين', 'هلو', 'السلام عليكم'])
 def send_welcome(message):
     welcome_text = (
         f"<b>🤖 مرحباً بك يا {message.from_user.first_name} في البوت الشامل للتحميل!</b>\n\n"
@@ -171,6 +172,14 @@ def handle_url_message(message):
             target=process_and_send_download,
             args=(message, status_msg, url, 'video')
         ).start()
+
+@bot.message_handler(func=lambda message: message.text and not bool(URL_REGEX.search(message.text or "")))
+def handle_non_url_message(message):
+    bot.reply_to(
+        message,
+        "💡 <b>أهلاً بك في بوت التحميل الشامل!</b>\n"
+        "لتحميل الفيديو أو الصور، يرجى إرسال <b>رابط (URL)</b> صحيح من أي منصة (يوتيوب، تيك توك، إنستغرام، فيسبوك، تويتر...) وسأقوم بسحبه لك فوراً بدون حقوق! 🚀"
+    )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("dl_mp3|"))
 def handle_convert_to_mp3(call):

@@ -201,106 +201,134 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
 
     downloaded_files = []
     detected_type = 'video'
+    success = False
+    error_msg = "تعذر سحب الوسائط من الرابط."
 
-    try:
-        # 1. إذا كان تيك توك والمطلوب فيديو أو صور، نسحب عبر محرك TikWM للحصول على فيديو HD بدون حقوق نهائياً
-        if format_type != 'mp3' and ('tiktok.com' in url.lower() or 'douyin.com' in url.lower()):
-            files, m_type = extract_tiktok_clean(url, unique_id)
-            if files:
-                downloaded_files = files
-                detected_type = m_type
-
-        # 2. إذا لم يتم التحميل بعد، أو كان إنستغرام صورة / منشور، جرب الساحب المتخصص
-        if not downloaded_files and format_type != 'mp3' and ('instagram.com/p/' in url.lower() or 'instagram.com/reel/' in url.lower()):
-            files, m_type = extract_instagram_clean(url, unique_id)
-            if files:
-                downloaded_files = files
-                detected_type = m_type
-
-        # 3. محرك yt-dlp المتكامل للفيديوهات والصوتيات واليوتيوب وباقي المنصات
-        if not downloaded_files:
-            ydl_opts = {
-                'outtmpl': output_template,
-                'ffmpeg_location': FFMPEG_PATH,
-                'quiet': True,
-                'no_warnings': True,
-                'ignoreerrors': True,
-                'nocheckcertificate': True,
-                'geo_bypass': True,
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android', 'ios', 'mweb']
-                    }
-                },
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                }
-            }
-            if 'instagram.com' in url or 'cdninstagram.com' in url:
-                ydl_opts['http_headers']['Referer'] = 'https://www.instagram.com/'
-
-            if format_type == 'mp3':
-                ydl_opts['format'] = 'bestaudio/best'
-                ydl_opts['postprocessors'] = [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }]
-            else:
-                ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
-                ydl_opts['merge_output_format'] = 'mp4'
-
+    # Loop for up to 5 retries if the download fails
+    for attempt in range(1, 6):
+        downloaded_files = []
+        detected_type = 'video'
+        
+        if attempt > 1:
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    if info:
-                        if 'entries' in info and info['entries']:
-                            for entry in info['entries']:
-                                if entry:
-                                    fname = ydl.prepare_filename(entry)
-                                    if format_type == 'mp3':
-                                        fname = os.path.splitext(fname)[0] + '.mp3'
-                                    if os.path.exists(fname):
-                                        downloaded_files.append(fname)
-                        else:
-                            fname = ydl.prepare_filename(info)
-                            if format_type == 'mp3':
-                                fname = os.path.splitext(fname)[0] + '.mp3'
-                            if os.path.exists(fname):
-                                downloaded_files.append(fname)
-            except Exception as yt_err:
-                print(f"[WARNING] yt-dlp downloader mobile client failed: {yt_err}")
+                bot.edit_message_text(
+                    f"⏳ <b>المحاولة ({attempt}/5) لفك تشفير وسحب الرابط...</b>\n<i>يرجى الانتظار ثوانٍ معدودة ⚡</i>",
+                    chat_id=chat_id,
+                    message_id=status_msg.message_id
+                )
+            except Exception:
+                pass
+                
+        try:
+            # 1. إذا كان تيك توك والمطلوب فيديو أو صور، نسحب عبر محرك TikWM للحصول على فيديو HD بدون حقوق نهائياً
+            if format_type != 'mp3' and ('tiktok.com' in url.lower() or 'douyin.com' in url.lower()):
+                files, m_type = extract_tiktok_clean(url, unique_id)
+                if files:
+                    downloaded_files = files
+                    detected_type = m_type
 
-            if not downloaded_files:
-                for fname in os.listdir(DOWNLOAD_DIR):
-                    if fname.startswith(unique_id):
-                        downloaded_files.append(os.path.join(DOWNLOAD_DIR, fname))
-
-            # 4. إذا كان يوتيوب وفشل التحميل السحابي المباشر، جرب محرك Cobalt API المساعد
-            if not downloaded_files and ('youtube.com' in url or 'youtu.be' in url):
-                try:
-                    cobalt_url = "https://api.cobalt.tools/api/json"
-                    payload = {'url': url, 'downloadMode': 'audio' if format_type == 'mp3' else 'auto'}
-                    r = requests.post(cobalt_url, json=payload, headers={'Accept': 'application/json'}, timeout=15)
-                    if r.status_code == 200 and r.json().get('url'):
-                        media_data = requests.get(r.json()['url'], timeout=30).content
-                        ext = ".mp3" if format_type == 'mp3' else ".mp4"
-                        fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_cobalt{ext}")
-                        with open(fname, 'wb') as f:
-                            f.write(media_data)
-                        downloaded_files.append(fname)
-                except Exception as cob_err:
-                    print(f"[ERROR] Cobalt fallback failed: {cob_err}")
-
-            # 5. إذا فشل yt-dlp في إنستغرام وبقي المحتوى فارغاً، جرب مرة أخرى بساحب الصور
-            if not downloaded_files and 'instagram.com' in url.lower():
+            # 2. إذا لم يتم التحميل بعد، أو كان إنستغرام صورة / منشور، جرب الساحب المتخصص
+            if not downloaded_files and format_type != 'mp3' and ('instagram.com/p/' in url.lower() or 'instagram.com/reel/' in url.lower()):
                 files, m_type = extract_instagram_clean(url, unique_id)
                 if files:
                     downloaded_files = files
                     detected_type = m_type
 
-        if not downloaded_files:
-            raise Exception("لم يتم العثور على ملفات وسائط متاحة للتحميل من هذا الرابط.")
+            # 3. محرك yt-dlp المتكامل للفيديوهات والصوتيات واليوتيوب وباقي المنصات
+            if not downloaded_files:
+                ydl_opts = {
+                    'outtmpl': output_template,
+                    'ffmpeg_location': FFMPEG_PATH,
+                    'quiet': True,
+                    'no_warnings': True,
+                    'ignoreerrors': True,
+                    'nocheckcertificate': True,
+                    'geo_bypass': True,
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': ['android', 'ios', 'mweb']
+                        }
+                    },
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                    }
+                }
+                if 'instagram.com' in url or 'cdninstagram.com' in url:
+                    ydl_opts['http_headers']['Referer'] = 'https://www.instagram.com/'
+
+                if format_type == 'mp3':
+                    ydl_opts['format'] = 'bestaudio/best'
+                    ydl_opts['postprocessors'] = [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }]
+                else:
+                    ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+                    ydl_opts['merge_output_format'] = 'mp4'
+
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                        if info:
+                            if 'entries' in info and info['entries']:
+                                for entry in info['entries']:
+                                    if entry:
+                                        fname = ydl.prepare_filename(entry)
+                                        if format_type == 'mp3':
+                                            fname = os.path.splitext(fname)[0] + '.mp3'
+                                        if os.path.exists(fname):
+                                            downloaded_files.append(fname)
+                            else:
+                                fname = ydl.prepare_filename(info)
+                                if format_type == 'mp3':
+                                    fname = os.path.splitext(fname)[0] + '.mp3'
+                                if os.path.exists(fname):
+                                    downloaded_files.append(fname)
+                except Exception as yt_err:
+                    print(f"[WARNING] yt-dlp downloader mobile client failed: {yt_err}")
+
+                if not downloaded_files:
+                    for fname in os.listdir(DOWNLOAD_DIR):
+                        if fname.startswith(unique_id):
+                            downloaded_files.append(os.path.join(DOWNLOAD_DIR, fname))
+
+                # 4. إذا كان يوتيوب وفشل التحميل السحابي المباشر، جرب محرك Cobalt API المساعد
+                if not downloaded_files and ('youtube.com' in url or 'youtu.be' in url):
+                    try:
+                        cobalt_url = "https://api.cobalt.tools/api/json"
+                        payload = {'url': url, 'downloadMode': 'audio' if format_type == 'mp3' else 'auto'}
+                        r = requests.post(cobalt_url, json=payload, headers={'Accept': 'application/json'}, timeout=15)
+                        if r.status_code == 200 and r.json().get('url'):
+                            media_data = requests.get(r.json()['url'], timeout=30).content
+                            ext = ".mp3" if format_type == 'mp3' else ".mp4"
+                            fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_cobalt{ext}")
+                            with open(fname, 'wb') as f:
+                                f.write(media_data)
+                            downloaded_files.append(fname)
+                    except Exception as cob_err:
+                        print(f"[ERROR] Cobalt fallback failed: {cob_err}")
+
+                # 5. إذا فشل yt-dlp في إنستغرام وبقي المحتوى فارغاً، جرب مرة أخرى بساحب الصور
+                if not downloaded_files and 'instagram.com' in url.lower():
+                    files, m_type = extract_instagram_clean(url, unique_id)
+                    if files:
+                        downloaded_files = files
+                        detected_type = m_type
+
+            if not downloaded_files:
+                raise Exception("لم يتم العثور على ملفات وسائط متاحة للتحميل من هذا الرابط.")
+                
+            success = True
+            break
+            
+        except Exception as attempt_err:
+            error_msg = str(attempt_err)
+            time.sleep(2)
+
+    try:
+        if not success:
+            raise Exception(error_msg)
 
         bot.edit_message_text(
             "📤 <b>اكتمل التنزيل! جاري الإرسال مباشرة الآن...</b> ⚡",
@@ -311,9 +339,6 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
         # ==========================================
         # الإرسال الصافي (فقط الفيديو أو الألبوم بدون شريط عنوان أو نصوص)
         # ==========================================
-        # ملاحظة هامة: تم تعيين reply_to_message_id=None لكي لا يظهر شريط العنوان أو الرابط فوق الفيديو
-        # وتم ترك caption="" لكي يظهر الفيديو كاملاً ونظيفاً تماماً كما طلبت
-        
         if len(downloaded_files) > 1 and format_type != 'mp3':
             media_group = []
             files_to_close = []
@@ -379,13 +404,27 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
         except Exception:
             pass
 
+        # حذف رسالة الرابط الأصلية التي أرسلها المستخدم تلقائياً بعد نجاح التحميل والإرسال
+        if message and hasattr(message, 'message_id') and message.from_user and message.from_user.id != bot.get_me().id:
+            try:
+                bot.delete_message(chat_id, message.message_id)
+            except Exception:
+                pass
+
     except Exception as e:
         error_msg = str(e)
         bot.edit_message_text(
-            f"❌ <b>عذراً، تعذر سحب الوسائط من الرابط:</b>\n<i>{error_msg.split(';')[-1][:120]}</i>",
+            f"❌ <b>عذراً، تعذر سحب الوسائط من الرابط بعد 5 محاولات متتالية:</b>\n<i>{error_msg.split(';')[-1][:120]}</i>",
             chat_id=chat_id,
             message_id=status_msg.message_id
         )
+        # حذف رسالة الرابط الأصلية التي أرسلها المستخدم تلقائياً حتى عند الفشل بعد 5 محاولات
+        if message and hasattr(message, 'message_id') and message.from_user and message.from_user.id != bot.get_me().id:
+            try:
+                bot.delete_message(chat_id, message.message_id)
+            except Exception:
+                pass
+
     finally:
         try:
             for fname in os.listdir(DOWNLOAD_DIR):
@@ -412,12 +451,24 @@ def run_bot_polling():
             print(f"[ERROR] Bot polling restart due to: {e}")
             time.sleep(5)
 
+def check_and_update_ytdl():
+    try:
+        import subprocess
+        import sys
+        print("[INFO] Checking and updating yt-dlp...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"])
+        print("[INFO] yt-dlp updated successfully.")
+    except Exception as e:
+        print(f"[WARNING] Failed to update yt-dlp: {e}")
+
 # تشغيل البوت في مسار منفصل (Background Thread) ليعمل سواء عبر python مباشرة أو عبر gunicorn في السحابة
 polling_thread = threading.Thread(target=run_bot_polling, daemon=True)
 polling_thread.start()
 
 if __name__ == "__main__":
     print("[INFO] Universal Downloader Bot is starting... Connected to Telegram successfully.")
+    # تحديث yt-dlp تلقائياً
+    check_and_update_ytdl()
     # تشغيل خادم الويب على المنفذ المطلوب في Render (أو 8080 محلياً)
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)

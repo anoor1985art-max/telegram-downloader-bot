@@ -128,12 +128,25 @@ def get_more_tools_markup(unique_id):
     )
     return markup
 
-def get_mix_presets_markup(unique_id, audio_unique_id):
-    markup = types.InlineKeyboardMarkup(row_width=1)
+def make_volume_bar(percentage):
+    filled = max(0, min(10, int(percentage / 10)))
+    empty = 10 - filled
+    return "■" * filled + "□" * empty
+
+def get_mix_bar_markup(unique_id, audio_unique_id, v0_percent=80, v1_percent=80):
+    markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("🎵 موسيقى خلفية هادئة (الأصلي 100% + الجديد 20%)", callback_data=f"edit_mixrun|{unique_id}|{audio_unique_id}|1.0|0.2"),
-        types.InlineKeyboardButton("🗣️ تركيز على الصوت الجديد (الأصلي 20% + الجديد 100%)", callback_data=f"edit_mixrun|{unique_id}|{audio_unique_id}|0.2|1.0"),
-        types.InlineKeyboardButton("⚖️ دمج متساوي متوازن (الأصلي 80% + الجديد 80%)", callback_data=f"edit_mixrun|{unique_id}|{audio_unique_id}|0.8|0.8"),
+        types.InlineKeyboardButton("➖ الأصلي -10%", callback_data=f"mix_adj|{unique_id}|{audio_unique_id}|{max(0, v0_percent - 10)}|{v1_percent}"),
+        types.InlineKeyboardButton("➕ الأصلي +10%", callback_data=f"mix_adj|{unique_id}|{audio_unique_id}|{min(200, v0_percent + 10)}|{v1_percent}")
+    )
+    markup.add(
+        types.InlineKeyboardButton("➖ الجديد -10%", callback_data=f"mix_adj|{unique_id}|{audio_unique_id}|{v0_percent}|{max(0, v1_percent - 10)}"),
+        types.InlineKeyboardButton("➕ الجديد +10%", callback_data=f"mix_adj|{unique_id}|{audio_unique_id}|{v0_percent}|{min(200, v1_percent + 10)}")
+    )
+    markup.add(
+        types.InlineKeyboardButton("✅ دمج وتطبيق الصوت", callback_data=f"edit_mixrun|{unique_id}|{audio_unique_id}|{v0_percent}|{v1_percent}")
+    )
+    markup.add(
         types.InlineKeyboardButton("❌ إلغاء وتراجع", callback_data=f"edit_cancel|{unique_id}")
     )
     return markup
@@ -757,10 +770,18 @@ def handle_incoming_audio_for_editor(message):
                 bot.delete_message(chat_id, status_msg.message_id)
             except Exception:
                 pass
+            
+            v0, v1 = 80, 80
+            bar_orig = make_volume_bar(v0)
+            bar_add = make_volume_bar(v1)
+            
             bot.send_message(
                 chat_id,
-                "🎚️ <b>اختر مستوى ونسبة دمج الصوت المضاف مع الصوت الأصلي:</b>",
-                reply_markup=get_mix_presets_markup(unique_id, audio_unique_id)
+                f"🎚️ <b>لوحة التحكم بمستويات دمج الصوت:</b>\n\n"
+                f"🔊 <b>صوت الفيديو الأصلي:</b>\n<code>[{bar_orig}] {v0}%</code>\n\n"
+                f"🎵 <b>الملف الصوتي المضاف:</b>\n<code>[{bar_add}] {v1}%</code>\n\n"
+                f"💡 <i>استخدم الأزرار أدناه لضبط مستويات الصوت بدقة ثم اضغط دمج:</i>",
+                reply_markup=get_mix_bar_markup(unique_id, audio_unique_id, v0, v1)
             )
             
     except Exception as e:
@@ -772,6 +793,42 @@ def handle_incoming_audio_for_editor(message):
             except Exception:
                 pass
         threading.Thread(target=delete_err, daemon=True).start()
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("mix_adj|"))
+def handle_mix_adjust_callbacks(call):
+    chat_id = call.message.chat.id
+    msg_id = call.message.message_id
+    data = call.data
+    
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+        
+    parts = data.split("|")
+    unique_id = parts[1]
+    audio_unique_id = parts[2]
+    v0 = int(parts[3])
+    v1 = int(parts[4])
+    
+    v0 = max(0, min(200, v0))
+    v1 = max(0, min(200, v1))
+    
+    bar_orig = make_volume_bar(v0)
+    bar_add = make_volume_bar(v1)
+    
+    try:
+        bot.edit_message_text(
+            f"🎚️ <b>لوحة التحكم بمستويات دمج الصوت:</b>\n\n"
+            f"🔊 <b>صوت الفيديو الأصلي:</b>\n<code>[{bar_orig}] {v0}%</code>\n\n"
+            f"🎵 <b>الملف الصوتي المضاف:</b>\n<code>[{bar_add}] {v1}%</code>\n\n"
+            f"💡 <i>استخدم الأزرار أدناه لضبط مستويات الصوت بدقة ثم اضغط دمج:</i>",
+            chat_id=chat_id,
+            message_id=msg_id,
+            reply_markup=get_mix_bar_markup(unique_id, audio_unique_id, v0, v1)
+        )
+    except Exception:
+        pass
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("edit_"))
 def handle_editor_callbacks(call):
@@ -919,8 +976,12 @@ def handle_editor_callbacks(call):
         
     elif action == "edit_mixrun":
         audio_unique_id = parts[2]
-        v0 = parts[3]
-        v1 = parts[4]
+        v0_pct = float(parts[3])
+        v1_pct = float(parts[4])
+        
+        # Convert percentages to decimal factors (e.g., 80% -> 0.8)
+        v0_dec = v0_pct / 100.0
+        v1_dec = v1_pct / 100.0
         
         audio_info = cached_files.get(audio_unique_id)
         if not audio_info:
@@ -934,7 +995,7 @@ def handle_editor_callbacks(call):
             FFMPEG_PATH, "-y",
             "-i", input_path,
             "-i", audio_path,
-            "-filter_complex", f"[0:a]volume={v0}[a0];[1:a]volume={v1}[a1];[a0][a1]amix=inputs=2:duration=first[a]",
+            "-filter_complex", f"[0:a]volume={v0_dec}[a0];[1:a]volume={v1_dec}[a1];[a0][a1]amix=inputs=2:duration=first[a]",
             "-map", "0:v",
             "-map", "[a]",
             "-c:v", "copy",

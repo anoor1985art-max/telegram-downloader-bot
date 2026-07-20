@@ -671,8 +671,8 @@ def handle_incoming_video(message):
             
         cached_files[unique_id] = {"file_path": file_path, "chat_id": chat_id}
         
-        # Schedule cleanup after 3 minutes (180s)
-        schedule_file_cleanup(unique_id, 180)
+        # Schedule cleanup after 24 hours (86400s)
+        schedule_file_cleanup(unique_id, 86400)
         
         # Delete status message
         try:
@@ -729,7 +729,7 @@ def handle_incoming_audio_for_editor(message):
             f.write(downloaded)
             
         cached_files[audio_unique_id] = {"file_path": audio_path, "chat_id": chat_id}
-        schedule_file_cleanup(audio_unique_id, 180)
+        schedule_file_cleanup(audio_unique_id, 86400)
         
         try:
             bot.delete_message(chat_id, message.message_id)
@@ -847,7 +847,7 @@ def handle_editor_callbacks(call):
     
     file_info = cached_files.get(unique_id)
     if not file_info and action not in ["edit_cancel", "edit_back"]:
-        bot.send_message(chat_id, "❌ عذراً، انتهت صلاحية هذا الملف المؤقت للتحرير (الحد الأقصى هو دقيقتان).")
+        bot.send_message(chat_id, "❌ عذراً، لم يتم العثور على هذا الفيديو على السيرفر (قد يكون تم حذفه تلقائياً بعد مرور 24 ساعة).")
         try:
             bot.delete_message(chat_id, msg_id)
         except Exception:
@@ -985,7 +985,7 @@ def handle_editor_callbacks(call):
         
         audio_info = cached_files.get(audio_unique_id)
         if not audio_info:
-            bot.send_message(chat_id, "❌ عذراً، انتهت صلاحية الملف الصوتي المرفق (الحد الأقصى 3 دقائق).")
+            bot.send_message(chat_id, "❌ عذراً، لم يتم العثور على الملف الصوتي المرفق على السيرفر (قد يكون تم حذفه تلقائياً بعد مرور 24 ساعة).")
             return
             
         audio_path = audio_info["file_path"]
@@ -1325,7 +1325,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
         # Cache the downloaded file for 2 minutes to allow editing!
         if downloaded_files and format_type != 'mp3' and not downloaded_files[0].lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
             cached_files[unique_id] = {"file_path": downloaded_files[0], "chat_id": chat_id}
-            schedule_file_cleanup(unique_id, 120)
+            schedule_file_cleanup(unique_id, 86400)
 
         # حذف رسالة الانتظار ليحصل المستخدم على الفيديو فقط بأبسط وأجمل شكل
         try:

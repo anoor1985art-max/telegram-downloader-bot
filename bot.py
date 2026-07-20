@@ -175,11 +175,28 @@ def handle_url_message(message):
 
 @bot.message_handler(func=lambda message: message.text and not bool(URL_REGEX.search(message.text or "")))
 def handle_non_url_message(message):
-    bot.reply_to(
+    sent_msg = bot.reply_to(
         message,
         "💡 <b>أهلاً بك في بوت التحميل الشامل!</b>\n"
         "لتحميل الفيديو أو الصور، يرجى إرسال <b>رابط (URL)</b> صحيح من أي منصة (يوتيوب، تيك توك، إنستغرام، فيسبوك، تويتر...) وسأقوم بسحبه لك فوراً بدون حقوق! 🚀"
     )
+    
+    # Delete both user message and bot response after 1 minute to keep the screen clean
+    def delete_msgs_after_delay(c_id, m_id1, m_id2):
+        time.sleep(60)
+        try:
+            bot.delete_message(c_id, m_id1)
+        except Exception:
+            pass
+        try:
+            bot.delete_message(c_id, m_id2)
+        except Exception:
+            pass
+
+    threading.Thread(
+        target=delete_msgs_after_delay,
+        args=(message.chat.id, message.message_id, sent_msg.message_id)
+    ).start()
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("dl_mp3|"))
 def handle_convert_to_mp3(call):
@@ -424,6 +441,16 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                 bot.delete_message(chat_id, message.message_id)
             except Exception:
                 pass
+
+        # حذف رسالة التنبيه بالخطأ الصادرة عن البوت تلقائياً بعد مرور 1 دقيقة
+        def delete_error_after_delay(c_id, m_id):
+            time.sleep(60)
+            try:
+                bot.delete_message(c_id, m_id)
+            except Exception:
+                pass
+                
+        threading.Thread(target=delete_error_after_delay, args=(chat_id, status_msg.message_id)).start()
 
     finally:
         try:

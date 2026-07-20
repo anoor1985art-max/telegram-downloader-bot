@@ -86,11 +86,8 @@ def get_editor_markup(unique_id):
         types.InlineKeyboardButton("🐢 تبطئة 0.5x", callback_data=f"edit_speed_slow|{unique_id}")
     )
     markup.add(
-        types.InlineKeyboardButton("🔄 عكس الفيديو", callback_data=f"edit_rev|{unique_id}"),
-        types.InlineKeyboardButton("🎞️ تحويل لـ GIF", callback_data=f"edit_gif|{unique_id}")
-    )
-    markup.add(
-        types.InlineKeyboardButton("⚙️ ضغط / تغيير الدقة والذكاء الاصطناعي", callback_data=f"edit_res_menu|{unique_id}")
+        types.InlineKeyboardButton("⚙️ الدقة والذكاء الاصطناعي", callback_data=f"edit_res_menu|{unique_id}"),
+        types.InlineKeyboardButton("🎭 أدوات ومؤثرات إضافية", callback_data=f"edit_more_menu|{unique_id}")
     )
     markup.add(
         types.InlineKeyboardButton("🎵 استخراج الصوت MP3", callback_data=f"edit_audio|{unique_id}"),
@@ -105,6 +102,31 @@ def get_resolution_markup(unique_id):
         types.InlineKeyboardButton("🎬 دقة متوسطة 720p (دقة عادية)", callback_data=f"edit_res_med|{unique_id}"),
         types.InlineKeyboardButton("✨ تحسين الجودة بالذكاء الاصطناعي (AI Upscale)", callback_data=f"edit_res_ai|{unique_id}"),
         types.InlineKeyboardButton("🔙 العودة لأدوات التعديل", callback_data=f"edit_back|{unique_id}")
+    )
+    return markup
+
+def get_more_tools_markup(unique_id):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔘 تحويل لنوت دائرية", callback_data=f"edit_vnote|{unique_id}"),
+        types.InlineKeyboardButton("🖼️ التقاط صورة مصغرة", callback_data=f"edit_thumb_menu|{unique_id}")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🏷️ إضافة نص مائي", callback_data=f"edit_wmark_menu|{unique_id}"),
+        types.InlineKeyboardButton("📐 تغيير القياس والأبعاد", callback_data=f"edit_crop_menu|{unique_id}")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data=f"edit_back|{unique_id}")
+    )
+    return markup
+
+def get_crop_markup(unique_id):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("📐 عمودي 9:16 (Reels/Stories)", callback_data=f"edit_crop_916|{unique_id}"),
+        types.InlineKeyboardButton("📐 أفقي 16:9 (YouTube)", callback_data=f"edit_crop_169|{unique_id}"),
+        types.InlineKeyboardButton("📐 مربع 1:1 (Instagram Feed)", callback_data=f"edit_crop_11|{unique_id}"),
+        types.InlineKeyboardButton("🔙 العودة للمؤثرات", callback_data=f"edit_more_menu|{unique_id}")
     )
     return markup
 
@@ -133,6 +155,8 @@ def run_ffmpeg_edit(chat_id, input_path, output_path, cmd, status_msg_id, succes
                 bot.send_audio(chat_id, f, caption=success_caption, reply_to_message_id=None)
             elif format_type == 'gif':
                 bot.send_animation(chat_id, f, caption=success_caption, reply_to_message_id=None)
+            elif format_type == 'vnote':
+                bot.send_video_note(chat_id, f, reply_to_message_id=None)
             else:
                 bot.send_video(chat_id, f, caption=success_caption, supports_streaming=True, reply_to_message_id=None)
                 
@@ -477,6 +501,106 @@ def handle_non_url_message(message):
             bot.send_message(chat_id, f"❌ <b>خطأ: {parse_err}</b>\nيرجى إرسال نطاق القص بشكل صحيح (مثال: 10 - 30).")
         return
 
+    elif state == "waiting_screenshot_time":
+        unique_id = state_info.get("unique_id")
+        status_msg_id = state_info.get("status_msg_id")
+        user_states[chat_id] = {"state": "idle"}
+        
+        try:
+            def to_seconds(t_str):
+                if ":" in t_str:
+                    t_parts = t_str.split(":")
+                    if len(t_parts) == 2:
+                        return int(t_parts[0]) * 60 + float(t_parts[1])
+                    elif len(t_parts) == 3:
+                        return int(t_parts[0]) * 3600 + int(t_parts[1]) * 60 + float(t_parts[2])
+                return float(t_str)
+                
+            seconds = to_seconds(text)
+            file_info = cached_files.get(unique_id)
+            if not file_info:
+                raise Exception("انتهت صلاحية الفيديو.")
+                
+            input_path = file_info["file_path"]
+            output_jpg = os.path.join(DOWNLOAD_DIR, f"{unique_id}_screenshot.jpg")
+            
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-ss", str(seconds),
+                "-i", input_path,
+                "-vframes", "1",
+                "-q:v", "2",
+                output_jpg
+            ]
+            
+            try:
+                bot.delete_message(chat_id, message.message_id)
+            except Exception:
+                pass
+                
+            def run_capture():
+                try:
+                    bot.edit_message_text("⏳ <b>جاري التقاط لقطة الشاشة من الفيديو...</b>", chat_id=chat_id, message_id=status_msg_id)
+                    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    p.wait()
+                    if os.path.exists(output_jpg):
+                        bot.edit_message_text("📤 <b>جاري إرسال الصورة الملتقطة...</b>", chat_id=chat_id, message_id=status_msg_id)
+                        with open(output_jpg, "rb") as f:
+                            bot.send_photo(chat_id, f, caption=f"🖼️ لقطة شاشة من الفيديو عند التوقيت: {text} ⚡")
+                        try:
+                            bot.delete_message(chat_id, status_msg_id)
+                        except Exception:
+                            pass
+                    else:
+                        raise Exception("فشل التقاط الصورة.")
+                except Exception as ex:
+                    bot.edit_message_text(f"❌ <b>فشل التقاط الصورة:</b>\n<i>{ex}</i>", chat_id=chat_id, message_id=status_msg_id)
+                finally:
+                    try:
+                        os.remove(output_jpg)
+                    except Exception:
+                        pass
+            threading.Thread(target=run_capture, daemon=True).start()
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ <b>خطأ: {e}</b>\nيرجى كتابة التوقيت بشكل صحيح.")
+        return
+
+    elif state == "waiting_watermark_text":
+        unique_id = state_info.get("unique_id")
+        status_msg_id = state_info.get("status_msg_id")
+        user_states[chat_id] = {"state": "idle"}
+        
+        try:
+            file_info = cached_files.get(unique_id)
+            if not file_info:
+                raise Exception("انتهت صلاحية الفيديو.")
+                
+            input_path = file_info["file_path"]
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_watermarked.mp4")
+            
+            safe_text = text.replace("'", "").replace(":", "")
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-i", input_path,
+                "-vf", f"drawtext=text='{safe_text}':x=w-tw-15:y=h-th-15:fontsize=20:fontcolor=white:box=1:boxcolor=black@0.4",
+                "-c:v", "libx264",
+                "-c:a", "copy",
+                output_path
+            ]
+            
+            try:
+                bot.delete_message(chat_id, message.message_id)
+            except Exception:
+                pass
+                
+            threading.Thread(
+                target=run_ffmpeg_edit,
+                args=(chat_id, input_path, output_path, cmd, status_msg_id, f"🏷️ تم دمج النص المائي بنجاح! ({safe_text}) ⚡")
+            ).start()
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ <b>خطأ: {e}</b>")
+        return
+
     sent_msg = bot.reply_to(
         message,
         "💡 <b>أهلاً بك في بوت التحميل الشامل!</b>\n"
@@ -604,6 +728,18 @@ def handle_editor_callbacks(call):
             chat_id=chat_id, message_id=msg_id, reply_markup=get_resolution_markup(unique_id)
         )
         
+    elif action == "edit_more_menu":
+        bot.edit_message_text(
+            "🎭 <b>أدوات ومؤثرات تعديل إضافية</b>\n\nاختر الأداة الإضافية لتعديل مقطع الفيديو:",
+            chat_id=chat_id, message_id=msg_id, reply_markup=get_more_tools_markup(unique_id)
+        )
+        
+    elif action == "edit_crop_menu":
+        bot.edit_message_text(
+            "📐 <b>تغيير القياس وقص الأبعاد للفيديو</b>\n\nاختر البُعد أو القياس المطلوب لاقتصاص الفيديو:",
+            chat_id=chat_id, message_id=msg_id, reply_markup=get_crop_markup(unique_id)
+        )
+        
     elif action == "edit_trim":
         status_msg = bot.send_message(
             chat_id,
@@ -619,6 +755,36 @@ def handle_editor_callbacks(call):
             "status_msg_id": status_msg.message_id
         }
         
+    elif action == "edit_thumb_menu":
+        status_msg = bot.send_message(
+            chat_id,
+            "🖼️ <b>التقاط صورة/بوستر مصغر من الفيديو</b>\n\n"
+            "يرجى إرسال الثانية أو التوقيت المطلوب التقاط الصورة عنده (بالثواني أو بصيغة دقيقة:ثانية).\n\n"
+            "💡 <i>أمثلة:</i>\n"
+            "▪️ <code>5</code> (التقاط صورة عند الثانية 5)\n"
+            "▪️ <code>01:20</code> (التقاط صورة عند الدقيقة الأولى و20 ثانية)"
+        )
+        user_states[chat_id] = {
+            "state": "waiting_screenshot_time",
+            "unique_id": unique_id,
+            "status_msg_id": status_msg.message_id
+        }
+        
+    elif action == "edit_wmark_menu":
+        status_msg = bot.send_message(
+            chat_id,
+            "🏷️ <b>دمج نص مائي على الفيديو للحفظ</b>\n\n"
+            "يرجى إرسال النص الذي ترغب بكتابته ودمجه في زاوية الفيديو لحفظ الحقوق:\n\n"
+            "💡 <i>أمثلة:</i>\n"
+            "▪️ <code>@mychannel</code>\n"
+            "▪️ <code>الملك الشامل للتحميل</code>"
+        )
+        user_states[chat_id] = {
+            "state": "waiting_watermark_text",
+            "unique_id": unique_id,
+            "status_msg_id": status_msg.message_id
+        }
+        
     else:
         # FFMPEG commands execution mapping
         output_path = None
@@ -630,7 +796,8 @@ def handle_editor_callbacks(call):
         
         if action == "edit_mute":
             output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_muted.mp4")
-            cmd = [FFMPEG_PATH, "-an", "-c:v", "copy", output_path] # wait, we need input parameter! We will construct cmd below
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-an", "-c:v", "copy", output_path]
+            success_caption = "🔇 تم كتم صوت الفيديو بنجاح! ⚡"
             
         elif action == "edit_rotr":
             output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_rotated_r.mp4")
@@ -679,15 +846,31 @@ def handle_editor_callbacks(call):
             cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-vf", "scale=-2:720", "-vcodec", "libx264", "-crf", "23", "-acodec", "aac", output_path]
             success_caption = "🎬 تم تحويل وتعديل دقة الفيديو لـ 720p بنجاح! ⚡"
             
+        elif action == "edit_vnote":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_vnote.mp4")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-vf", "crop=w='min(in_w\\,in_h)':h='min(in_w\\,in_h)',scale=240:240", "-c:v", "libx264", "-c:a", "aac", "-strict", "experimental", output_path]
+            success_caption = "🔘 تم تحويل الفيديو إلى نوت دائرية بنجاح! ⚡"
+            format_type = "vnote"
+            
+        elif action == "edit_crop_916":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_crop_916.mp4")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-vf", "crop=w='min(in_w\\,in_h*9/16)':h='min(in_h\\,in_w*16/9)'", "-c:v", "libx264", "-c:a", "copy", output_path]
+            success_caption = "📐 تم قص وتغيير قياس الفيديو للعمودي 9:16 بنجاح! ⚡"
+            
+        elif action == "edit_crop_169":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_crop_169.mp4")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-vf", "crop=w='min(in_w\\,in_h*16/9)':h='min(in_h\\,in_w*9/16)'", "-c:v", "libx264", "-c:a", "copy", output_path]
+            success_caption = "📐 تم قص وتغيير قياس الفيديو للأفقي 16:9 بنجاح! ⚡"
+            
+        elif action == "edit_crop_11":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_crop_11.mp4")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-vf", "crop=w='min(in_w\\,in_h)':h='min(in_w\\,in_h)'", "-c:v", "libx264", "-c:a", "copy", output_path]
+            success_caption = "📐 تم قص وتغيير قياس الفيديو للمربع 1:1 بنجاح! ⚡"
+            
         elif action == "edit_res_ai":
             # Start AI Super Resolution Prediction in background thread
             threading.Thread(target=run_ai_upscale, args=(chat_id, input_path, unique_id, status_msg.message_id)).start()
             return
-            
-        if action == "edit_mute":
-            # Correct mute command syntax
-            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-an", "-c:v", "copy", output_path]
-            success_caption = "🔇 تم كتم صوت الفيديو بنجاح! ⚡"
             
         if cmd and output_path:
             threading.Thread(

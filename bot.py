@@ -10,6 +10,7 @@ import re
 import time
 import uuid
 import threading
+import subprocess
 import requests
 import telebot
 from telebot import types
@@ -21,7 +22,12 @@ import imageio_ffmpeg
 # ==========================================
 # إعدادات البوت الأساسية
 # ==========================================
-BOT_TOKEN = "8660209792:AAEJpMoNB7W_oBefqDj32EggEzG4NHsiay0"
+from dotenv import load_dotenv
+load_dotenv()
+
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8660209792:AAEJpMoNB7W_oBefqDj32EggEzG4NHsiay0").strip()
+REPLICATE_TOKEN = os.environ.get("REPLICATE_API_TOKEN", "").strip()
+
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
 DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
@@ -29,6 +35,232 @@ if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+
+# ==========================================
+# أنظمة إدارة وتعديل الفيديو (Video Editor Toolkit & AI Resolution Enhancer)
+# ==========================================
+user_states = {} # chat_id: {"state": "waiting_trim_range", "unique_id": ..., "status_msg_id": ...}
+cached_files = {} # unique_id: {"file_path": "...", "chat_id": ...}
+
+def upload_to_tmpfiles(local_path):
+    try:
+        with open(local_path, "rb") as f:
+            r = requests.post("https://tmpfiles.org/api/v1/upload", files={"file": f}, timeout=15)
+        if r.status_code == 200:
+            res_data = r.json()
+            raw_url = res_data.get("data", {}).get("url")
+            if raw_url:
+                return raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+    except Exception as e:
+        print(f"[Upload Error]: {e}")
+    return None
+
+def schedule_file_cleanup(unique_id, delay=120):
+    def cleanup():
+        time.sleep(delay)
+        try:
+            for fname in os.listdir(DOWNLOAD_DIR):
+                if fname.startswith(unique_id):
+                    os.remove(os.path.join(DOWNLOAD_DIR, fname))
+        except Exception:
+            pass
+        if unique_id in cached_files:
+            try:
+                del cached_files[unique_id]
+            except Exception:
+                pass
+    threading.Thread(target=cleanup, daemon=True).start()
+
+def get_editor_markup(unique_id):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✂️ قص وتقطيع (Trim)", callback_data=f"edit_trim|{unique_id}"),
+        types.InlineKeyboardButton("🔇 كتم الصوت (Mute)", callback_data=f"edit_mute|{unique_id}")
+    )
+    markup.add(
+        types.InlineKeyboardButton("↪️ تدوير يمين 90°", callback_data=f"edit_rotr|{unique_id}"),
+        types.InlineKeyboardButton("↩️ تدوير يسار 90°", callback_data=f"edit_rotl|{unique_id}")
+    )
+    markup.add(
+        types.InlineKeyboardButton("⚡ تسريع 2x", callback_data=f"edit_speed_fast|{unique_id}"),
+        types.InlineKeyboardButton("🐢 تبطئة 0.5x", callback_data=f"edit_speed_slow|{unique_id}")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🔄 عكس الفيديو", callback_data=f"edit_rev|{unique_id}"),
+        types.InlineKeyboardButton("🎞️ تحويل لـ GIF", callback_data=f"edit_gif|{unique_id}")
+    )
+    markup.add(
+        types.InlineKeyboardButton("⚙️ ضغط / تغيير الدقة والذكاء الاصطناعي", callback_data=f"edit_res_menu|{unique_id}")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🎵 استخراج الصوت MP3", callback_data=f"edit_audio|{unique_id}"),
+        types.InlineKeyboardButton("❌ إلغاء وتنظيف", callback_data=f"edit_cancel|{unique_id}")
+    )
+    return markup
+
+def get_resolution_markup(unique_id):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("🎬 دقة منخفضة 480p (ضغط وحجم أقل)", callback_data=f"edit_res_low|{unique_id}"),
+        types.InlineKeyboardButton("🎬 دقة متوسطة 720p (دقة عادية)", callback_data=f"edit_res_med|{unique_id}"),
+        types.InlineKeyboardButton("✨ تحسين الجودة بالذكاء الاصطناعي (AI Upscale)", callback_data=f"edit_res_ai|{unique_id}"),
+        types.InlineKeyboardButton("🔙 العودة لأدوات التعديل", callback_data=f"edit_back|{unique_id}")
+    )
+    return markup
+
+def run_ffmpeg_edit(chat_id, input_path, output_path, cmd, status_msg_id, success_caption, format_type='video'):
+    try:
+        bot.edit_message_text(
+            "⏳ <b>جاري معالجة وتعديل الفيديو باستخدام محرك FFmpeg...</b>",
+            chat_id=chat_id, message_id=status_msg_id
+        )
+        
+        # Run process
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p.wait()
+        
+        if not os.path.exists(output_path) or os.path.getsize(output_path) < 100:
+            raise Exception("فشلت معالجة الفيديو في FFmpeg.")
+            
+        bot.edit_message_text(
+            "📥 <b>اكتمل التعديل بنجاح! جاري إرسال المقطع المحدث...</b> ⚡",
+            chat_id=chat_id, message_id=status_msg_id
+        )
+        
+        # Send output
+        with open(output_path, "rb") as f:
+            if format_type == 'audio':
+                bot.send_audio(chat_id, f, caption=success_caption, reply_to_message_id=None)
+            elif format_type == 'gif':
+                bot.send_animation(chat_id, f, caption=success_caption, reply_to_message_id=None)
+            else:
+                bot.send_video(chat_id, f, caption=success_caption, supports_streaming=True, reply_to_message_id=None)
+                
+        # Clean up status message
+        try:
+            bot.delete_message(chat_id, status_msg_id)
+        except Exception:
+            pass
+            
+    except Exception as e:
+        bot.edit_message_text(
+            f"❌ <b>فشلت عملية معالجة وتعديل المقطع:</b>\n<i>{str(e)[:120]}</i>",
+            chat_id=chat_id, message_id=status_msg_id
+        )
+        # Delete error notification after 1 minute
+        def delete_msg():
+            time.sleep(60)
+            try:
+                bot.delete_message(chat_id, status_msg_id)
+            except Exception:
+                pass
+        threading.Thread(target=delete_msg, daemon=True).start()
+    finally:
+        # Clean up output path
+        try:
+            os.remove(output_path)
+        except Exception:
+            pass
+
+def run_ai_upscale(chat_id, file_path, unique_id, status_msg_id):
+    try:
+        if not REPLICATE_TOKEN:
+            raise Exception("رمز الوصول للذكاء الاصطناعي (REPLICATE_API_TOKEN) غير مهيأ حالياً.")
+            
+        bot.edit_message_text(
+            "⏳ <b>جاري رفع مقطع الفيديو لتمريره عبر الذكاء الاصطناعي...</b>",
+            chat_id=chat_id, message_id=status_msg_id
+        )
+        
+        # 1. Upload to tmpfiles to get public URL
+        public_url = upload_to_tmpfiles(file_path)
+        if not public_url:
+            raise Exception("فشل رفع المقطع إلى خادم التجهيز العام.")
+            
+        bot.edit_message_text(
+            "✨ <b>جاري تشغيل معالجة الذكاء الاصطناعي لإعادة بناء الجودة (Real-ESRGAN Video)... يرجى الانتظار دقيقة تقريباً</b> 🚀",
+            chat_id=chat_id, message_id=status_msg_id
+        )
+        
+        # 2. Call Replicate API
+        headers = {
+            "Authorization": f"Token {REPLICATE_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        url = "https://api.replicate.com/v1/predictions"
+        payload = {
+            "version": "e8b2c2865910fae1b9b4f4f7fa3fe8a8a49c6cb4b25dcdccdb3755331e847c23",
+            "input": {
+                "video": public_url,
+                "scale": 2,
+                "face_enhance": True
+            }
+        }
+        
+        r = requests.post(url, json=payload, headers=headers, timeout=20)
+        if r.status_code != 201:
+            raise Exception(f"فشلت تهيئة المعالجة في Replicate: {r.text}")
+            
+        prediction = r.json()
+        predict_id = prediction.get("id")
+        
+        # Poll prediction status
+        status_url = f"https://api.replicate.com/v1/predictions/{predict_id}"
+        max_checks = 60
+        output_url = None
+        
+        for _ in range(max_checks):
+            time.sleep(4)
+            check_r = requests.get(status_url, headers=headers, timeout=15)
+            if check_r.status_code == 200:
+                res = check_r.json()
+                status = res.get("status")
+                if status == "succeeded":
+                    output_url = res.get("output")
+                    break
+                elif status in ["failed", "canceled"]:
+                    raise Exception(f"فشلت المعالجة أثناء تشغيل النموذج: {res.get('error')}")
+            else:
+                raise Exception(f"فشل التحقق من حالة المعالجة: {check_r.text}")
+                
+        if not output_url:
+            raise Exception("انتهت مهلة الانتظار دون الحصول على نتائج من الذكاء الاصطناعي.")
+            
+        bot.edit_message_text(
+            "📥 <b>اكتمل تحسين الجودة بالذكاء الاصطناعي! جاري تحميل المقطع المحسّن وإرساله...</b> ⚡",
+            chat_id=chat_id, message_id=status_msg_id
+        )
+        
+        # Download output video
+        enhanced_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_ai_enhanced.mp4")
+        video_data = requests.get(output_url, timeout=40).content
+        with open(enhanced_path, "wb") as f:
+            f.write(video_data)
+            
+        # Send video
+        with open(enhanced_path, "rb") as f:
+            bot.send_video(chat_id, f, caption="✨ تم تحسين الجودة والدقة بالذكاء الاصطناعي الفائق (AI Super Resolution) 🚀", reply_to_message_id=None)
+            
+        # Delete status message
+        try:
+            bot.delete_message(chat_id, status_msg_id)
+        except Exception:
+            pass
+            
+    except Exception as e:
+        bot.edit_message_text(
+            f"❌ <b>تعذر تحسين الفيديو بالذكاء الاصطناعي:</b>\n<i>{str(e)[:120]}</i>",
+            chat_id=chat_id, message_id=status_msg_id
+        )
+        # Delete error notification after 1 minute
+        def delete_msg():
+            time.sleep(60)
+            try:
+                bot.delete_message(chat_id, status_msg_id)
+            except Exception:
+                pass
+        threading.Thread(target=delete_msg, daemon=True).start()
 
 # ==========================================
 # الترحيب والقوائم التفاعلية
@@ -175,10 +407,81 @@ def handle_url_message(message):
 
 @bot.message_handler(func=lambda message: message.text and not bool(URL_REGEX.search(message.text or "")))
 def handle_non_url_message(message):
+    chat_id = message.chat.id
+    text = message.text.strip()
+    text_lower = text.lower()
+    
+    # Check waiting_trim_range state
+    state_info = user_states.get(chat_id) or {}
+    state = state_info.get("state")
+    
+    if state == "waiting_trim_range":
+        unique_id = state_info.get("unique_id")
+        status_msg_id = state_info.get("status_msg_id")
+        
+        # Reset state
+        user_states[chat_id] = {"state": "idle"}
+        
+        try:
+            parts = re.split(r'[-–]|إلى|الى|to', text)
+            if len(parts) != 2:
+                raise Exception("صيغة نطاق الوقت غير صحيحة. يرجى كتابتها بالصيغة (بداية - نهاية).")
+                
+            start_str = parts[0].strip()
+            end_str = parts[1].strip()
+            
+            def to_seconds(t_str):
+                if ":" in t_str:
+                    t_parts = t_str.split(":")
+                    if len(t_parts) == 2:
+                        return int(t_parts[0]) * 60 + float(t_parts[1])
+                    elif len(t_parts) == 3:
+                        return int(t_parts[0]) * 3600 + int(t_parts[1]) * 60 + float(t_parts[2])
+                return float(t_str)
+                
+            start_sec = to_seconds(start_str)
+            end_sec = to_seconds(end_str)
+            
+            if start_sec >= end_sec:
+                raise Exception("وقت البداية يجب أن يكون أقل من وقت النهاية للقص.")
+                
+            file_info = cached_files.get(unique_id)
+            if not file_info:
+                raise Exception("عذراً، انتهت صلاحية الفيديو المؤقت للتعديل (الحد الأقصى هو دقيقتان).")
+                
+            input_path = file_info["file_path"]
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_trimmed.mp4")
+            
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-ss", str(start_sec),
+                "-to", str(end_sec),
+                "-i", input_path,
+                "-c:v", "libx264",
+                "-c:a", "aac",
+                "-strict", "experimental",
+                output_path
+            ]
+            
+            try:
+                bot.delete_message(chat_id, message.message_id)
+            except Exception:
+                pass
+                
+            threading.Thread(
+                target=run_ffmpeg_edit,
+                args=(chat_id, input_path, output_path, cmd, status_msg_id, f"✂️ تم قص وتعديل المقطع بنجاح! ({start_str} - {end_str}) ⚡")
+            ).start()
+            
+        except Exception as parse_err:
+            bot.send_message(chat_id, f"❌ <b>خطأ: {parse_err}</b>\nيرجى إرسال نطاق القص بشكل صحيح (مثال: 10 - 30).")
+        return
+
     sent_msg = bot.reply_to(
         message,
         "💡 <b>أهلاً بك في بوت التحميل الشامل!</b>\n"
-        "لتحميل الفيديو أو الصور، يرجى إرسال <b>رابط (URL)</b> صحيح من أي منصة (يوتيوب، تيك توك، إنستغرام، فيسبوك، تويتر...) وسأقوم بسحبه لك فوراً بدون حقوق! 🚀"
+        "لتحميل الفيديو أو الصور، يرجى إرسال <b>رابط (URL)</b> صحيح من أي منصة (يوتيوب، تيك توك، إنستغرام، فيسبوك، تويتر...) وسأقوم بسحبه لك فوراً بدون حقوق! 🚀\n\n"
+        "🎬 <b>ملاحظة:</b> يمكنك أيضاً إرسال أي مقطع فيديو مباشرة من جهازك للبدء بقصه وتعديله فوراً!"
     )
     
     # Delete both user message and bot response after 1 minute to keep the screen clean
@@ -197,6 +500,200 @@ def handle_non_url_message(message):
         target=delete_msgs_after_delay,
         args=(message.chat.id, message.message_id, sent_msg.message_id)
     ).start()
+
+@bot.message_handler(content_types=['video'])
+def handle_incoming_video(message):
+    chat_id = message.chat.id
+    status_msg = bot.reply_to(message, "⏳ <b>جاري استلام وتحميل الفيديو لتجهيز لوحة أدوات التعديل...</b>")
+    try:
+        file_info = bot.get_file(message.video.file_id)
+        downloaded = bot.download_file(file_info.file_path)
+        
+        unique_id = f"edit_{uuid.uuid4().hex[:6]}"
+        file_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_source.mp4")
+        with open(file_path, "wb") as f:
+            f.write(downloaded)
+            
+        cached_files[unique_id] = {"file_path": file_path, "chat_id": chat_id}
+        
+        # Schedule cleanup after 3 minutes (180s)
+        schedule_file_cleanup(unique_id, 180)
+        
+        # Delete status message
+        try:
+            bot.delete_message(chat_id, status_msg.message_id)
+        except Exception:
+            pass
+            
+        # Send editing toolkit menu
+        bot.send_message(
+            chat_id,
+            "🛠️ <b>استوديو تعديل وقص الفيديو</b>\n\nاختر الأداة المطلوبة للبدء بتعديل هذا الفيديو:",
+            reply_markup=get_editor_markup(unique_id)
+        )
+        
+        # Delete original video message to keep chat clean
+        try:
+            bot.delete_message(chat_id, message.message_id)
+        except Exception:
+            pass
+            
+    except Exception as e:
+        bot.edit_message_text(f"❌ فشل استلام الفيديو: {e}", chat_id=chat_id, message_id=status_msg.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_"))
+def handle_editor_callbacks(call):
+    chat_id = call.message.chat.id
+    msg_id = call.message.message_id
+    data = call.data
+    
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+        
+    parts = data.split("|")
+    action = parts[0]
+    unique_id = parts[1] if len(parts) > 1 else ""
+    
+    file_info = cached_files.get(unique_id)
+    if not file_info and action not in ["edit_cancel", "edit_back"]:
+        bot.send_message(chat_id, "❌ عذراً، انتهت صلاحية هذا الملف المؤقت للتحرير (الحد الأقصى هو دقيقتان).")
+        try:
+            bot.delete_message(chat_id, msg_id)
+        except Exception:
+            pass
+        return
+        
+    input_path = file_info["file_path"] if file_info else ""
+    
+    if action == "edit_start":
+        bot.send_message(
+            chat_id,
+            "🛠️ <b>استوديو تعديل وقص الفيديو</b>\n\nاختر الأداة المطلوبة للبدء بتعديل هذا الفيديو:",
+            reply_markup=get_editor_markup(unique_id)
+        )
+        
+    elif action == "edit_cancel":
+        # Clear files immediately
+        try:
+            for fname in os.listdir(DOWNLOAD_DIR):
+                if fname.startswith(unique_id):
+                    os.remove(os.path.join(DOWNLOAD_DIR, fname))
+        except Exception:
+            pass
+        if unique_id in cached_files:
+            try:
+                del cached_files[unique_id]
+            except Exception:
+                pass
+        try:
+            bot.delete_message(chat_id, msg_id)
+        except Exception:
+            pass
+            
+    elif action == "edit_back":
+        bot.edit_message_text(
+            "🛠️ <b>استوديو تعديل وقص الفيديو</b>\n\nاختر الأداة المطلوبة للبدء بتعديل هذا الفيديو:",
+            chat_id=chat_id, message_id=msg_id, reply_markup=get_editor_markup(unique_id)
+        )
+        
+    elif action == "edit_res_menu":
+        bot.edit_message_text(
+            "⚙️ <b>خيارات الدقة والذكاء الاصطناعي للفيديو</b>\n\nاختر الإجراء المطلوب لتعديل دقة وجودة الفيديو:",
+            chat_id=chat_id, message_id=msg_id, reply_markup=get_resolution_markup(unique_id)
+        )
+        
+    elif action == "edit_trim":
+        status_msg = bot.send_message(
+            chat_id,
+            "✂️ <b>قص وتقطيع مقطع الفيديو</b>\n\n"
+            "يرجى إرسال وقت البداية والنهاية للقص بالصيغة التالية: <code>بداية - نهاية</code> بالثواني أو الدقائق.\n\n"
+            "💡 <i>أمثلة:</i>\n"
+            "▪️ <code>10 - 30</code> (لقص الفيديو من الثانية 10 إلى الثانية 30)\n"
+            "▪️ <code>01:15 - 02:30</code> (لقص الفيديو من الدقيقة 1:15 إلى الدقيقة 2:30)"
+        )
+        user_states[chat_id] = {
+            "state": "waiting_trim_range",
+            "unique_id": unique_id,
+            "status_msg_id": status_msg.message_id
+        }
+        
+    else:
+        # FFMPEG commands execution mapping
+        output_path = None
+        cmd = []
+        success_caption = ""
+        format_type = "video"
+        
+        status_msg = bot.send_message(chat_id, "⏳ <b>جاري تحضير وتجهيز معالجة الفيديو...</b>")
+        
+        if action == "edit_mute":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_muted.mp4")
+            cmd = [FFMPEG_PATH, "-an", "-c:v", "copy", output_path] # wait, we need input parameter! We will construct cmd below
+            
+        elif action == "edit_rotr":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_rotated_r.mp4")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-vf", "transpose=1", "-c:v", "libx264", "-c:a", "aac", "-strict", "experimental", output_path]
+            success_caption = "↪️ تم تدوير الفيديو لليمين 90 درجة بنجاح! ⚡"
+            
+        elif action == "edit_rotl":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_rotated_l.mp4")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-vf", "transpose=2", "-c:v", "libx264", "-c:a", "aac", "-strict", "experimental", output_path]
+            success_caption = "↩️ تم تدوير الفيديو لليسار 90 درجة بنجاح! ⚡"
+            
+        elif action == "edit_speed_fast":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_fast.mp4")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-filter_complex", "[0:v]setpts=0.5*PTS[v];[0:a]atempo=2.0[a]", "-map", "[v]", "-map", "[a]", output_path]
+            success_caption = "⚡ تم تسريع الفيديو بمعدل 2x بنجاح! 🚀"
+            
+        elif action == "edit_speed_slow":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_slow.mp4")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-filter_complex", "[0:v]setpts=2.0*PTS[v];[0:a]atempo=0.5[a]", "-map", "[v]", "-map", "[a]", output_path]
+            success_caption = "🐢 تم تبطئة الفيديو بمعدل 0.5x بنجاح! 🐢"
+            
+        elif action == "edit_rev":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_reversed.mp4")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-vf", "reverse", "-af", "areverse", output_path]
+            success_caption = "🔄 تم عكس تشغيل الفيديو بنجاح! ⚡"
+            
+        elif action == "edit_gif":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_gif.gif")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-vf", "scale=320:-1", "-r", "10", "-f", "gif", output_path]
+            success_caption = "🎞️ تم تحويل الفيديو إلى صورة متحركة GIF بنجاح! ⚡"
+            format_type = "gif"
+            
+        elif action == "edit_audio":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_audio.mp3")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-vn", "-acodec", "libmp3lame", "-aq", "2", output_path]
+            success_caption = "🎵 تم استخراج الصوت MP3 بنجاح! 🎧"
+            format_type = "audio"
+            
+        elif action == "edit_res_low":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_low_480p.mp4")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-vf", "scale=-2:480", "-vcodec", "libx264", "-crf", "28", "-acodec", "aac", output_path]
+            success_caption = "📉 تم ضغط وتقليل دقة الفيديو لـ 480p بنجاح! ⚡"
+            
+        elif action == "edit_res_med":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_med_720p.mp4")
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-vf", "scale=-2:720", "-vcodec", "libx264", "-crf", "23", "-acodec", "aac", output_path]
+            success_caption = "🎬 تم تحويل وتعديل دقة الفيديو لـ 720p بنجاح! ⚡"
+            
+        elif action == "edit_res_ai":
+            # Start AI Super Resolution Prediction in background thread
+            threading.Thread(target=run_ai_upscale, args=(chat_id, input_path, unique_id, status_msg.message_id)).start()
+            return
+            
+        if action == "edit_mute":
+            # Correct mute command syntax
+            cmd = [FFMPEG_PATH, "-y", "-i", input_path, "-an", "-c:v", "copy", output_path]
+            success_caption = "🔇 تم كتم صوت الفيديو بنجاح! ⚡"
+            
+        if cmd and output_path:
+            threading.Thread(
+                target=run_ffmpeg_edit,
+                args=(chat_id, input_path, output_path, cmd, status_msg.message_id, success_caption, format_type)
+            ).start()
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("dl_mp3|"))
 def handle_convert_to_mp3(call):
@@ -394,8 +891,11 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                     )
                 else:
                     # فيديو كامل ونظيف بدون حقوق وبدون أي نص أو شريط عنوان
-                    markup = types.InlineKeyboardMarkup()
-                    markup.add(types.InlineKeyboardButton("🎵 استخراج الصوت (MP3) من هذا الفيديو", callback_data=f"dl_mp3|{url}"))
+                    markup = types.InlineKeyboardMarkup(row_width=1)
+                    markup.add(
+                        types.InlineKeyboardButton("🛠️ أدوات تعديل وقص هذا الفيديو", callback_data=f"edit_start|{unique_id}"),
+                        types.InlineKeyboardButton("🎵 استخراج الصوت (MP3) من هذا الفيديو", callback_data=f"dl_mp3|{url}")
+                    )
                     
                     if file_size_mb <= 49.5:
                         bot.send_video(
@@ -414,6 +914,11 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                             reply_to_message_id=None,
                             reply_markup=markup
                         )
+
+        # Cache the downloaded file for 2 minutes to allow editing!
+        if downloaded_files and format_type != 'mp3' and not downloaded_files[0].lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
+            cached_files[unique_id] = {"file_path": downloaded_files[0], "chat_id": chat_id}
+            schedule_file_cleanup(unique_id, 120)
 
         # حذف رسالة الانتظار ليحصل المستخدم على الفيديو فقط بأبسط وأجمل شكل
         try:
@@ -453,12 +958,15 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
         threading.Thread(target=delete_error_after_delay, args=(chat_id, status_msg.message_id)).start()
 
     finally:
-        try:
-            for fname in os.listdir(DOWNLOAD_DIR):
-                if fname.startswith(unique_id):
-                    os.remove(os.path.join(DOWNLOAD_DIR, fname))
-        except Exception:
-            pass
+        # If the download failed, clean up immediately.
+        # If it succeeded, schedule_file_cleanup will remove them after 2 minutes.
+        if not success:
+            try:
+                for fname in os.listdir(DOWNLOAD_DIR):
+                    if fname.startswith(unique_id):
+                        os.remove(os.path.join(DOWNLOAD_DIR, fname))
+            except Exception:
+                pass
 
 # ==========================================
 # تشغيل خادم الويب (للحفاظ على البوت مستيقظاً 24/7 على Render) وتشغيل البوت

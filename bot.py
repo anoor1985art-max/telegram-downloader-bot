@@ -116,7 +116,25 @@ def get_more_tools_markup(unique_id):
         types.InlineKeyboardButton("📐 تغيير القياس والأبعاد", callback_data=f"edit_crop_menu|{unique_id}")
     )
     markup.add(
+        types.InlineKeyboardButton("🎵 استبدال الصوت بالكامل", callback_data=f"edit_audio_replace|{unique_id}"),
+        types.InlineKeyboardButton("🎚️ دمج صوتين ومستويات", callback_data=f"edit_audio_mix_menu|{unique_id}")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🔄 عكس الفيديو", callback_data=f"edit_rev|{unique_id}"),
+        types.InlineKeyboardButton("🎞️ تحويل لـ GIF", callback_data=f"edit_gif|{unique_id}")
+    )
+    markup.add(
         types.InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data=f"edit_back|{unique_id}")
+    )
+    return markup
+
+def get_mix_presets_markup(unique_id, audio_unique_id):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("🎵 موسيقى خلفية هادئة (الأصلي 100% + الجديد 20%)", callback_data=f"edit_mixrun|{unique_id}|{audio_unique_id}|1.0|0.2"),
+        types.InlineKeyboardButton("🗣️ تركيز على الصوت الجديد (الأصلي 20% + الجديد 100%)", callback_data=f"edit_mixrun|{unique_id}|{audio_unique_id}|0.2|1.0"),
+        types.InlineKeyboardButton("⚖️ دمج متساوي متوازن (الأصلي 80% + الجديد 80%)", callback_data=f"edit_mixrun|{unique_id}|{audio_unique_id}|0.8|0.8"),
+        types.InlineKeyboardButton("❌ إلغاء وتراجع", callback_data=f"edit_cancel|{unique_id}")
     )
     return markup
 
@@ -665,6 +683,96 @@ def handle_incoming_video(message):
     except Exception as e:
         bot.edit_message_text(f"❌ فشل استلام الفيديو: {e}", chat_id=chat_id, message_id=status_msg.message_id)
 
+@bot.message_handler(content_types=['audio', 'voice'])
+def handle_incoming_audio_for_editor(message):
+    chat_id = message.chat.id
+    
+    state_info = user_states.get(chat_id) or {}
+    state = state_info.get("state")
+    unique_id = state_info.get("unique_id")
+    status_msg_id = state_info.get("status_msg_id")
+    
+    if state not in ["waiting_replace_audio", "waiting_mix_audio"]:
+        # Standard non-editor audio file upload. Ignore it.
+        return
+        
+    # Reset state immediately to prevent duplicate runs
+    user_states[chat_id] = {"state": "idle"}
+    
+    status_msg = bot.send_message(chat_id, "⏳ <b>جاري استلام وتحميل الملف الصوتي المرفق...</b>")
+    try:
+        if message.content_type == 'voice':
+            file_id = message.voice.file_id
+        else:
+            file_id = message.audio.file_id
+            
+        file_info = bot.get_file(file_id)
+        downloaded = bot.download_file(file_info.file_path)
+        
+        audio_unique_id = f"audio_{uuid.uuid4().hex[:6]}"
+        audio_ext = ".ogg" if message.content_type == 'voice' else ".mp3"
+        audio_path = os.path.join(DOWNLOAD_DIR, f"{audio_unique_id}{audio_ext}")
+        with open(audio_path, "wb") as f:
+            f.write(downloaded)
+            
+        cached_files[audio_unique_id] = {"file_path": audio_path, "chat_id": chat_id}
+        schedule_file_cleanup(audio_unique_id, 180)
+        
+        try:
+            bot.delete_message(chat_id, message.message_id)
+        except Exception:
+            pass
+            
+        try:
+            bot.delete_message(chat_id, status_msg_id)
+        except Exception:
+            pass
+            
+        file_info_video = cached_files.get(unique_id)
+        if not file_info_video:
+            raise Exception("انتهت صلاحية الفيديو المراد تعديله.")
+            
+        video_path = file_info_video["file_path"]
+        
+        if state == "waiting_replace_audio":
+            output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_replaced_audio.mp4")
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-i", video_path,
+                "-i", audio_path,
+                "-map", "0:v",
+                "-map", "1:a",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-shortest",
+                output_path
+            ]
+            threading.Thread(
+                target=run_ffmpeg_edit,
+                args=(chat_id, video_path, output_path, cmd, status_msg.message_id, "🎵 تم استبدال وتغيير صوت الفيديو بالكامل بنجاح! ⚡")
+            ).start()
+            
+        elif state == "waiting_mix_audio":
+            try:
+                bot.delete_message(chat_id, status_msg.message_id)
+            except Exception:
+                pass
+            bot.send_message(
+                chat_id,
+                "🎚️ <b>اختر مستوى ونسبة دمج الصوت المضاف مع الصوت الأصلي:</b>",
+                reply_markup=get_mix_presets_markup(unique_id, audio_unique_id)
+            )
+            
+    except Exception as e:
+        bot.edit_message_text(f"❌ <b>فشل استلام ومعالجة الصوت:</b>\n<i>{e}</i>", chat_id=chat_id, message_id=status_msg.message_id)
+        def delete_err():
+            time.sleep(30)
+            try:
+                bot.delete_message(chat_id, status_msg.message_id)
+            except Exception:
+                pass
+        threading.Thread(target=delete_err, daemon=True).start()
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("edit_"))
 def handle_editor_callbacks(call):
     chat_id = call.message.chat.id
@@ -784,6 +892,61 @@ def handle_editor_callbacks(call):
             "unique_id": unique_id,
             "status_msg_id": status_msg.message_id
         }
+        
+    elif action == "edit_audio_replace":
+        status_msg = bot.send_message(
+            chat_id,
+            "🎵 <b>استبدال صوت الفيديو بالكامل</b>\n\n"
+            "يرجى إرسال أو توجيه (Forward) الملف الصوتي (MP3/M4A) أو التسجيل الصوتي الذي تريد استخدامه كصوت بديل للمقطع:"
+        )
+        user_states[chat_id] = {
+            "state": "waiting_replace_audio",
+            "unique_id": unique_id,
+            "status_msg_id": status_msg.message_id
+        }
+        
+    elif action == "edit_audio_mix_menu":
+        status_msg = bot.send_message(
+            chat_id,
+            "🎚️ <b>دمج صوتين مع تعديل المستويات</b>\n\n"
+            "يرجى إرسال أو توجيه (Forward) الملف الصوتي (MP3/M4A) أو التسجيل الصوتي الذي تريد دمجه مع صوت الفيديو الأصلي:"
+        )
+        user_states[chat_id] = {
+            "state": "waiting_mix_audio",
+            "unique_id": unique_id,
+            "status_msg_id": status_msg.message_id
+        }
+        
+    elif action == "edit_mixrun":
+        audio_unique_id = parts[2]
+        v0 = parts[3]
+        v1 = parts[4]
+        
+        audio_info = cached_files.get(audio_unique_id)
+        if not audio_info:
+            bot.send_message(chat_id, "❌ عذراً، انتهت صلاحية الملف الصوتي المرفق (الحد الأقصى 3 دقائق).")
+            return
+            
+        audio_path = audio_info["file_path"]
+        output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_mixed_audio.mp4")
+        
+        cmd = [
+            FFMPEG_PATH, "-y",
+            "-i", input_path,
+            "-i", audio_path,
+            "-filter_complex", f"[0:a]volume={v0}[a0];[1:a]volume={v1}[a1];[a0][a1]amix=inputs=2:duration=first[a]",
+            "-map", "0:v",
+            "-map", "[a]",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            output_path
+        ]
+        
+        status_msg = bot.send_message(chat_id, "⏳ <b>جاري دمج وموازنة مسارات الصوت المحددة...</b>")
+        threading.Thread(
+            target=run_ffmpeg_edit,
+            args=(chat_id, input_path, output_path, cmd, status_msg.message_id, "🎚️ تم دمج وموازنة الصوت بنجاح بالنسَب التي اخترتها! ⚡")
+        ).start()
         
     else:
         # FFMPEG commands execution mapping

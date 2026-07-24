@@ -27,6 +27,7 @@ load_dotenv()
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8660209792:AAEJpMoNB7W_oBefqDj32EggEzG4NHsiay0").strip()
 REPLICATE_TOKEN = os.environ.get("REPLICATE_API_TOKEN", "").strip()
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "").strip()
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
@@ -461,6 +462,62 @@ def extract_instagram_clean(url, unique_id):
             return downloaded, 'photo'
     except Exception:
         pass
+    return [], None
+
+# ==========================================
+# سحب مخصص لإنستغرام عبر RapidAPI المدعوم (لحل مشكلة الحظر)
+# ==========================================
+def extract_instagram_rapidapi(url, unique_id):
+    if not RAPIDAPI_KEY:
+        return [], None
+    try:
+        # نستخدم واحدة من أقوى واجهات إنستغرام المجانية على RapidAPI
+        api_url = "https://instagram-scraper-api2.p.rapidapi.com/v1/post_info"
+        querystring = {"code_or_id_or_url": url, "include_insights": "false"}
+        headers = {
+            "x-rapidapi-key": RAPIDAPI_KEY,
+            "x-rapidapi-host": "instagram-scraper-api2.p.rapidapi.com"
+        }
+        
+        response = requests.get(api_url, headers=headers, params=querystring, timeout=20)
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get('data', {}).get('items', [])
+            if not items:
+                # محاولة أخرى للبحث في البيانات
+                items = [data.get('data', {})]
+                
+            downloaded = []
+            m_type = 'photo'
+            
+            for item in items:
+                # سحب الفيديو
+                if item.get('video_versions'):
+                    vid_url = item['video_versions'][0].get('url')
+                    if vid_url:
+                        r = requests.get(vid_url, timeout=20)
+                        if r.status_code == 200:
+                            save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_rapid.mp4")
+                            with open(save_path, 'wb') as f:
+                                f.write(r.content)
+                            downloaded.append(save_path)
+                            m_type = 'video'
+                # أو سحب الصور
+                elif item.get('image_versions2'):
+                    candidates = item['image_versions2'].get('candidates', [])
+                    if candidates:
+                        img_url = candidates[0].get('url')
+                        r = requests.get(img_url, timeout=15)
+                        if r.status_code == 200:
+                            save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_rapid.jpg")
+                            with open(save_path, 'wb') as f:
+                                f.write(r.content)
+                            downloaded.append(save_path)
+                            
+            if downloaded:
+                return downloaded, m_type
+    except Exception as e:
+        print(f"[ERROR] RapidAPI Instagram failed: {e}")
     return [], None
 
 # ==========================================
@@ -1351,7 +1408,10 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
 
             # 2. إذا لم يتم التحميل بعد، أو كان إنستغرام صورة / منشور، جرب الساحب المتخصص
             if not downloaded_files and format_type != 'mp3' and ('instagram.com/p/' in url.lower() or 'instagram.com/reel/' in url.lower()):
-                files, m_type = extract_instagram_clean(url, unique_id)
+                # أولوية لساحب RapidAPI إذا كان المفتاح موجوداً
+                files, m_type = extract_instagram_rapidapi(url, unique_id)
+                if not files:
+                    files, m_type = extract_instagram_clean(url, unique_id)
                 if files:
                     downloaded_files = files
                     detected_type = m_type

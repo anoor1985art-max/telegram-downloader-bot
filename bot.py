@@ -86,11 +86,14 @@ def get_editor_markup(unique_id):
         types.InlineKeyboardButton("🐢 تبطئة 0.5x", callback_data=f"edit_speed_slow|{unique_id}")
     )
     markup.add(
-        types.InlineKeyboardButton("⚙️ الدقة والذكاء الاصطناعي", callback_data=f"edit_res_menu|{unique_id}"),
+        types.InlineKeyboardButton("🎬 دمج فيديوهين معاً", callback_data=f"edit_video_merge_menu|{unique_id}"),
         types.InlineKeyboardButton("🎭 أدوات ومؤثرات إضافية", callback_data=f"edit_more_menu|{unique_id}")
     )
     markup.add(
-        types.InlineKeyboardButton("🎵 استخراج الصوت MP3", callback_data=f"edit_audio|{unique_id}"),
+        types.InlineKeyboardButton("⚙️ الدقة والذكاء الاصطناعي", callback_data=f"edit_res_menu|{unique_id}"),
+        types.InlineKeyboardButton("🎵 استخراج الصوت MP3", callback_data=f"edit_audio|{unique_id}")
+    )
+    markup.add(
         types.InlineKeyboardButton("❌ إلغاء وتنظيف", callback_data=f"edit_cancel|{unique_id}")
     )
     return markup
@@ -120,12 +123,29 @@ def get_more_tools_markup(unique_id):
         types.InlineKeyboardButton("🎚️ دمج صوتين ومستويات", callback_data=f"edit_audio_mix_menu|{unique_id}")
     )
     markup.add(
-        types.InlineKeyboardButton("🔄 عكس الفيديو", callback_data=f"edit_rev|{unique_id}"),
-        types.InlineKeyboardButton("🎞️ تحويل لـ GIF", callback_data=f"edit_gif|{unique_id}")
+        types.InlineKeyboardButton("🎬 دمج فيديوهين معاً", callback_data=f"edit_video_merge_menu|{unique_id}"),
+        types.InlineKeyboardButton("🔄 عكس الفيديو", callback_data=f"edit_rev|{unique_id}")
     )
     markup.add(
+        types.InlineKeyboardButton("🎞️ تحويل لـ GIF", callback_data=f"edit_gif|{unique_id}"),
         types.InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data=f"edit_back|{unique_id}")
     )
+    return markup
+
+def get_video_merge_options_markup(unique_id, second_unique_id, is_video_second=True):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    if is_video_second:
+        markup.add(
+            types.InlineKeyboardButton("🎞️ 1. دمج تسلسلي متتابع (الفيديو 1 يتبعه الفيديو 2 متصلاً)", callback_data=f"vmerge_run|{unique_id}|{second_unique_id}|concat"),
+            types.InlineKeyboardButton("🖼️ 2. دمج الشاشة مقسومة جنباً إلى جنب (Side-by-Side)", callback_data=f"vmerge_run|{unique_id}|{second_unique_id}|hstack"),
+            types.InlineKeyboardButton("🎚️ 3. دمج الشاشة مقسومة عمودياً (فوق بعض Vertical)", callback_data=f"vmerge_run|{unique_id}|{second_unique_id}|vstack")
+        )
+    else:
+        markup.add(
+            types.InlineKeyboardButton("🎵 1. دمج وتركيب الصوت على الفيديو الصامت مباشرة", callback_data=f"vmerge_run|{unique_id}|{second_unique_id}|audio_replace"),
+            types.InlineKeyboardButton("🎚️ 2. دمج الصوت مع صوت الفيديو الأصلي (خلفية صوتية)", callback_data=f"vmerge_run|{unique_id}|{second_unique_id}|audio_mix")
+        )
+    markup.add(types.InlineKeyboardButton("❌ إلغاء وتراجع", callback_data=f"edit_cancel|{unique_id}"))
     return markup
 
 def make_volume_bar(percentage):
@@ -414,8 +434,9 @@ def extract_instagram_clean(url, unique_id):
         clean_url = url.split('?')[0].rstrip('/')
         embed_url = f"{clean_url}/embed/captioned/"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
-        html = requests.get(embed_url, headers=headers, timeout=15).text
-        soup = BeautifulSoup(html, 'html.parser')
+        import html
+        html_content = requests.get(embed_url, headers=headers, timeout=15).text
+        soup = BeautifulSoup(html_content, 'html.parser')
         
         media_urls = []
         for img in soup.find_all('img'):
@@ -656,16 +677,74 @@ def handle_non_url_message(message):
         args=(message.chat.id, message.message_id, sent_msg.message_id)
     ).start()
 
-@bot.message_handler(content_types=['video'])
+@bot.message_handler(content_types=['video', 'document'])
 def handle_incoming_video(message):
     chat_id = message.chat.id
+    
+    state_info = user_states.get(chat_id) or {}
+    state = state_info.get("state")
+    unique_id = state_info.get("unique_id")
+    status_msg_id = state_info.get("status_msg_id")
+    
+    if state == "waiting_merge_second_video":
+        user_states[chat_id] = {"state": "idle"}
+        status_msg = bot.send_message(chat_id, "⏳ <b>جاري استلام وتحميل المقطع الثاني للدمج...</b>")
+        try:
+            if message.content_type == 'document':
+                file_id = message.document.file_id
+                ext = os.path.splitext(message.document.file_name or ".mp4")[1]
+            else:
+                file_id = message.video.file_id
+                ext = ".mp4"
+                
+            file_info = bot.get_file(file_id)
+            downloaded = bot.download_file(file_info.file_path)
+            
+            second_unique_id = f"vsec_{uuid.uuid4().hex[:6]}"
+            second_path = os.path.join(DOWNLOAD_DIR, f"{second_unique_id}{ext}")
+            with open(second_path, "wb") as f:
+                f.write(downloaded)
+            cached_files[second_unique_id] = {"file_path": second_path, "chat_id": chat_id}
+            schedule_file_cleanup(second_unique_id, 86400)
+            
+            try:
+                bot.delete_message(chat_id, message.message_id)
+            except Exception:
+                pass
+            try:
+                if status_msg_id: bot.delete_message(chat_id, status_msg_id)
+            except Exception:
+                pass
+            try:
+                bot.delete_message(chat_id, status_msg.message_id)
+            except Exception:
+                pass
+                
+            bot.send_message(
+                chat_id,
+                "🎬 <b>استوديو دمج مقاطع الفيديو بالذكاء الاصطناعي</b>\n\nتم استلام المقطع الثاني بنجاح! اختر الآن طريقة دمج المقطعين لإخراج الفيديو الموحد:",
+                reply_markup=get_video_merge_options_markup(unique_id, second_unique_id, is_video_second=True)
+            )
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ فشل استلام المقطع الثاني للدمج: {e}")
+        return
+
+    if message.content_type == 'document' and not (message.document.file_name or "").lower().endswith(('.mp4', '.mov', '.avi', '.webm', '.mkv')):
+        return # تجاهل المستندات غير المرئية
+        
     status_msg = bot.reply_to(message, "⏳ <b>جاري استلام وتحميل الفيديو لتجهيز لوحة أدوات التعديل...</b>")
     try:
-        file_info = bot.get_file(message.video.file_id)
+        if message.content_type == 'document':
+            file_id = message.document.file_id
+            ext = os.path.splitext(message.document.file_name or ".mp4")[1]
+        else:
+            file_id = message.video.file_id
+            ext = ".mp4"
+        file_info = bot.get_file(file_id)
         downloaded = bot.download_file(file_info.file_path)
         
         unique_id = f"edit_{uuid.uuid4().hex[:6]}"
-        file_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_source.mp4")
+        file_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_source{ext}")
         with open(file_path, "wb") as f:
             f.write(downloaded)
             
@@ -705,7 +784,7 @@ def handle_incoming_audio_for_editor(message):
     unique_id = state_info.get("unique_id")
     status_msg_id = state_info.get("status_msg_id")
     
-    if state not in ["waiting_replace_audio", "waiting_mix_audio"]:
+    if state not in ["waiting_replace_audio", "waiting_mix_audio", "waiting_merge_second_video"]:
         # Standard non-editor audio file upload. Ignore it.
         return
         
@@ -737,9 +816,18 @@ def handle_incoming_audio_for_editor(message):
             pass
             
         try:
-            bot.delete_message(chat_id, status_msg_id)
+            if status_msg_id: bot.delete_message(chat_id, status_msg_id)
+            bot.delete_message(chat_id, status_msg.message_id)
         except Exception:
             pass
+            
+        if state == "waiting_merge_second_video":
+            bot.send_message(
+                chat_id,
+                "🎬 <b>استوديو دمج الفيديو مع الصوت</b>\n\nتم استلام الملف الصوتي بنجاح! اختر الآن طريقة التركيب والدمج مع هذا الفيديو:",
+                reply_markup=get_video_merge_options_markup(unique_id, audio_unique_id, is_video_second=False)
+            )
+            return
             
         file_info_video = cached_files.get(unique_id)
         if not file_info_video:
@@ -830,7 +918,7 @@ def handle_mix_adjust_callbacks(call):
     except Exception:
         pass
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_"))
+@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_") or call.data.startswith("vmerge_"))
 def handle_editor_callbacks(call):
     chat_id = call.message.chat.id
     msg_id = call.message.message_id
@@ -846,7 +934,7 @@ def handle_editor_callbacks(call):
     unique_id = parts[1] if len(parts) > 1 else ""
     
     file_info = cached_files.get(unique_id)
-    if not file_info and action not in ["edit_cancel", "edit_back"]:
+    if not file_info and action not in ["edit_cancel", "edit_back", "vmerge_group_run", "vmerge_run"]:
         bot.send_message(chat_id, "❌ عذراً، لم يتم العثور على هذا الفيديو على السيرفر (قد يكون تم حذفه تلقائياً بعد مرور 24 ساعة).")
         try:
             bot.delete_message(chat_id, msg_id)
@@ -1007,6 +1095,119 @@ def handle_editor_callbacks(call):
         threading.Thread(
             target=run_ffmpeg_edit,
             args=(chat_id, input_path, output_path, cmd, status_msg.message_id, "🎚️ تم دمج وموازنة الصوت بنجاح بالنسَب التي اخترتها! ⚡")
+        ).start()
+        
+    elif action == "edit_video_merge_menu":
+        status_msg = bot.send_message(
+            chat_id,
+            "🎬 <b>دمج فيديوهين معاً (أو فيديو مع صوت)</b>\n\n"
+            "يرجى الآن إرسال أو توجيه (Forward) <b>مقطع الفيديو الثاني</b> أو الملف الصوتي الذي تريد دمجه وربطه مع هذا الفيديو لإنتاج فيديو واحد موحد:\n\n"
+            "💡 <i>(يمكنك إرسال مقطع فيديو 📹 أو ملف مستند MP4 📂 أو تسجيل صوتي 🎵)</i>"
+        )
+        user_states[chat_id] = {
+            "state": "waiting_merge_second_video",
+            "unique_id": unique_id,
+            "status_msg_id": status_msg.message_id
+        }
+
+    elif action == "vmerge_run":
+        second_unique_id = parts[2]
+        merge_mode = parts[3]
+        
+        file_info2 = cached_files.get(second_unique_id)
+        if not file_info or not file_info2:
+            bot.send_message(chat_id, "❌ عذراً، لم يتم العثور على أحد الملفين المحددين للدمج على السيرفر (قد تكون انتهت صلاحيتهما).")
+            return
+            
+        path1 = input_path
+        path2 = file_info2["file_path"]
+        output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_merged_{merge_mode}.mp4")
+        
+        status_msg = bot.send_message(chat_id, "⏳ <b>جاري دمج المقطعين بالذكاء الاصطناعي وإخراج الفيديو الموحد...</b> 🎬⚡")
+        
+        if merge_mode == "concat":
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-i", path1, "-i", path2,
+                "-filter_complex", "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1[v0]; [1:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1[v1]; [v0][0:a?][v1][1:a?]concat=n=2:v=1:a=1[vout][aout]",
+                "-map", "[vout]", "-map", "[aout]",
+                "-c:v", "libx264", "-c:a", "aac", output_path
+            ]
+            caption = "🎞️ تم دمج الفيديوهين تسلسلياً في مقطع واحد موحد بنجاح! ⚡"
+        elif merge_mode == "hstack":
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-i", path1, "-i", path2,
+                "-filter_complex", "[0:v]scale=640:720:force_original_aspect_ratio=decrease,pad=640:720:(ow-iw)/2:(oh-ih)/2,setsar=1[v0]; [1:v]scale=640:720:force_original_aspect_ratio=decrease,pad=640:720:(ow-iw)/2:(oh-ih)/2,setsar=1[v1]; [v0][v1]hstack=inputs=2[vout]",
+                "-map", "[vout]", "-map", "0:a?",
+                "-c:v", "libx264", "-c:a", "aac", output_path
+            ]
+            caption = "🖼️ تم دمج الفيديوهين جنباً إلى جنب في شاشة واحدة بنجاح! ⚡"
+        elif merge_mode == "vstack":
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-i", path1, "-i", path2,
+                "-filter_complex", "[0:v]scale=720:640:force_original_aspect_ratio=decrease,pad=720:640:(ow-iw)/2:(oh-ih)/2,setsar=1[v0]; [1:v]scale=720:640:force_original_aspect_ratio=decrease,pad=720:640:(ow-iw)/2:(oh-ih)/2,setsar=1[v1]; [v0][v1]vstack=inputs=2[vout]",
+                "-map", "[vout]", "-map", "0:a?",
+                "-c:v", "libx264", "-c:a", "aac", output_path
+            ]
+            caption = "🎚️ تم دمج الفيديوهين عمودياً (فوق بعض) بنجاح! ⚡"
+        elif merge_mode == "audio_replace":
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-i", path1, "-i", path2,
+                "-map", "0:v:0", "-map", "1:a:0?",
+                "-c:v", "copy", "-c:a", "aac", "-shortest", output_path
+            ]
+            caption = "🎵 تم تركيب الصوت الجديد على الفيديو بنجاح! ⚡"
+        elif merge_mode == "audio_mix":
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-i", path1, "-i", path2,
+                "-filter_complex", "[0:a?][1:a?]amix=inputs=2:duration=first[aout]",
+                "-map", "0:v:0", "-map", "[aout]",
+                "-c:v", "copy", "-c:a", "aac", output_path
+            ]
+            caption = "🎚️ تم دمج المسارين الصوتين مع المقطع بنجاح! ⚡"
+        else:
+            bot.send_message(chat_id, "❌ وضع دمج غير معروف.")
+            return
+            
+        threading.Thread(
+            target=run_ffmpeg_edit,
+            args=(chat_id, path1, output_path, cmd, status_msg.message_id, caption)
+        ).start()
+
+    elif action == "vmerge_group_run":
+        group_info = cached_files.get(f"{unique_id}_group")
+        if not group_info or not group_info.get("files"):
+            bot.send_message(chat_id, "❌ عذراً، انتهت صلاحية المقاطع المحددة على السيرفر.")
+            return
+            
+        files_list = [f for f in group_info["files"] if not f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))]
+        if len(files_list) < 2:
+            bot.send_message(chat_id, "⚠️ يجب وجود مقطعين فيديو أو أكثر لإتمام الدمج الموحد.")
+            return
+            
+        output_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_group_merged.mp4")
+        status_msg = bot.send_message(chat_id, "⏳ <b>جاري دمج وتجميع جميع أجزاء ومقاطع الفيديو المتعددة في فيديو موحد...</b> 🎬⚡")
+        
+        filter_parts = []
+        for idx in range(len(files_list)):
+            filter_parts.append(f"[{idx}:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1[v{idx}];")
+        concat_inputs_v = "".join([f"[v{idx}]" for idx in range(len(files_list))])
+        concat_inputs_a = "".join([f"[{idx}:a?]" for idx in range(len(files_list))])
+        
+        full_filter = "".join(filter_parts) + f"{concat_inputs_v}{concat_inputs_a}concat=n={len(files_list)}:v=1:a=1[vout][aout]"
+        
+        cmd = [FFMPEG_PATH, "-y"]
+        for fpath in files_list:
+            cmd.extend(["-i", fpath])
+        cmd.extend(["-filter_complex", full_filter, "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-c:a", "aac", output_path])
+        
+        threading.Thread(
+            target=run_ffmpeg_edit,
+            args=(chat_id, files_list[0], output_path, cmd, status_msg.message_id, "🎬 تم دمج جميع المقاطع المستلمة في فيديو واحد موحد بنجاح! ⚡")
         ).start()
         
     else:
@@ -1214,12 +1415,12 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                         if fname.startswith(unique_id):
                             downloaded_files.append(os.path.join(DOWNLOAD_DIR, fname))
 
-                # 4. إذا كان يوتيوب وفشل التحميل السحابي المباشر، جرب محرك Cobalt API المساعد
-                if not downloaded_files and ('youtube.com' in url or 'youtu.be' in url):
+                # 4. محرك Cobalt API المساعد يوتيوب وإنستغرام
+                if not downloaded_files and ('youtube.com' in url or 'youtu.be' in url or 'instagram.com' in url):
                     try:
                         cobalt_url = "https://api.cobalt.tools/api/json"
                         payload = {'url': url, 'downloadMode': 'audio' if format_type == 'mp3' else 'auto'}
-                        r = requests.post(cobalt_url, json=payload, headers={'Accept': 'application/json'}, timeout=15)
+                        r = requests.post(cobalt_url, json=payload, headers={'Accept': 'application/json', 'Content-Type': 'application/json'}, timeout=15)
                         if r.status_code == 200 and r.json().get('url'):
                             media_data = requests.get(r.json()['url'], timeout=30).content
                             ext = ".mp3" if format_type == 'mp3' else ".mp4"
@@ -1261,6 +1462,32 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
         # الإرسال الصافي (فقط الفيديو أو الألبوم بدون شريط عنوان أو نصوص)
         # ==========================================
         if len(downloaded_files) > 1 and format_type != 'mp3':
+            # 💡 الفحص الذكي التلقائي: إذا كان الملفان أحدهما فيديو صامت والآخر ملف صوتي منفصل (بسبب عدم دمج yt-dlp)، ندمجهما فوراً قبل الإرسال!
+            if len(downloaded_files) == 2:
+                f1, f2 = downloaded_files[0], downloaded_files[1]
+                is_f1_audio = f1.lower().endswith(('.mp3', '.m4a', '.wav', '.aac', '.ogg', '.flac'))
+                is_f2_audio = f2.lower().endswith(('.mp3', '.m4a', '.wav', '.aac', '.ogg', '.flac'))
+                is_f1_video = f1.lower().endswith(('.mp4', '.webm', '.mkv', '.mov', '.avi'))
+                is_f2_video = f2.lower().endswith(('.mp4', '.webm', '.mkv', '.mov', '.avi'))
+                
+                if (is_f1_video and is_f2_audio) or (is_f2_video and is_f1_audio):
+                    v_path = f1 if is_f1_video else f2
+                    a_path = f1 if is_f1_audio else f2
+                    merged_auto = os.path.join(DOWNLOAD_DIR, f"{unique_id}_automerged.mp4")
+                    try:
+                        cmd_auto = [
+                            FFMPEG_PATH, "-y",
+                            "-i", v_path, "-i", a_path,
+                            "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy", "-c:a", "aac",
+                            merged_auto
+                        ]
+                        subprocess.run(cmd_auto, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        if os.path.exists(merged_auto) and os.path.getsize(merged_auto) > 100:
+                            downloaded_files = [merged_auto]
+                    except Exception as auto_err:
+                        print(f"[AUTO-MERGE FAILED]: {auto_err}")
+
+        if len(downloaded_files) > 1 and format_type != 'mp3':
             media_group = []
             files_to_close = []
             for filepath in downloaded_files[:10]:
@@ -1276,6 +1503,26 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
             
             for f in files_to_close:
                 f.close()
+                
+            # 💡 إرسال أزرار التحكم والتعديل والدمج للمقاطع المتعددة المستلمة!
+            markup_group = types.InlineKeyboardMarkup(row_width=1)
+            for idx, filepath in enumerate(downloaded_files[:5]):
+                if not filepath.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) and not detected_type == 'photo':
+                    sub_unique = f"{unique_id}_g{idx}"
+                    cached_files[sub_unique] = {"file_path": filepath, "chat_id": chat_id}
+                    schedule_file_cleanup(sub_unique, 86400)
+                    markup_group.add(types.InlineKeyboardButton(f"🛠️ أدوات تعديل وقص المقطع رقم {idx+1}", callback_data=f"edit_start|{sub_unique}"))
+            
+            markup_group.add(types.InlineKeyboardButton("🎬 دمج وربط هذه المقاطع معاً في فيديو موحد ⚡", callback_data=f"vmerge_group_run|{unique_id}"))
+            
+            cached_files[f"{unique_id}_group"] = {"files": downloaded_files, "chat_id": chat_id}
+            schedule_file_cleanup(f"{unique_id}_group", 86400)
+            
+            bot.send_message(
+                chat_id,
+                "🛠️ <b>أدوات التعديل والقص والدمج للمقاطع المستلمة أعلاه:</b>",
+                reply_markup=markup_group
+            )
         else:
             filepath = downloaded_files[0]
             file_size_mb = os.path.getsize(filepath) / (1024 * 1024)

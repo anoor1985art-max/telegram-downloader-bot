@@ -471,51 +471,69 @@ def extract_instagram_rapidapi(url, unique_id):
     if not RAPIDAPI_KEY:
         return [], None
     try:
-        # نستخدم واحدة من أقوى واجهات إنستغرام المجانية على RapidAPI
-        api_url = "https://instagram-scraper-api2.p.rapidapi.com/v1/post_info"
-        querystring = {"code_or_id_or_url": url, "include_insights": "false"}
+        # واجهة Instagram Reels Downloader API (EaseApi)
+        api_url = "https://instagram-reels-downloader-api.p.rapidapi.com/download"
+        querystring = {"url": url}
         headers = {
             "x-rapidapi-key": RAPIDAPI_KEY,
-            "x-rapidapi-host": "instagram-scraper-api2.p.rapidapi.com"
+            "x-rapidapi-host": "instagram-reels-downloader-api.p.rapidapi.com"
         }
         
         response = requests.get(api_url, headers=headers, params=querystring, timeout=20)
+        
         if response.status_code == 200:
-            data = response.json()
-            items = data.get('data', {}).get('items', [])
-            if not items:
-                # محاولة أخرى للبحث في البيانات
-                items = [data.get('data', {})]
-                
+            # دالة للبحث عن روابط mp4 أو jpg داخل أي هيكل JSON
+            def find_media_urls(obj):
+                urls = []
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        if isinstance(v, str) and v.startswith('http'):
+                            if '.mp4' in v or 'video' in k.lower():
+                                urls.append((v, 'video'))
+                            elif '.jpg' in v or 'image' in k.lower() or 'cover' in k.lower() or 'thumbnail' in k.lower():
+                                urls.append((v, 'photo'))
+                        else:
+                            urls.extend(find_media_urls(v))
+                elif isinstance(obj, list):
+                    for item in obj:
+                        urls.extend(find_media_urls(item))
+                return urls
+
+            try:
+                data = response.json()
+            except Exception:
+                return [], None
+
+            found_urls = find_media_urls(data)
             downloaded = []
             m_type = 'photo'
             
-            for item in items:
-                # سحب الفيديو
-                if item.get('video_versions'):
-                    vid_url = item['video_versions'][0].get('url')
-                    if vid_url:
-                        r = requests.get(vid_url, timeout=20)
-                        if r.status_code == 200:
-                            save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_rapid.mp4")
-                            with open(save_path, 'wb') as f:
-                                f.write(r.content)
-                            downloaded.append(save_path)
-                            m_type = 'video'
-                # أو سحب الصور
-                elif item.get('image_versions2'):
-                    candidates = item['image_versions2'].get('candidates', [])
-                    if candidates:
-                        img_url = candidates[0].get('url')
-                        r = requests.get(img_url, timeout=15)
-                        if r.status_code == 200:
-                            save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_rapid.jpg")
-                            with open(save_path, 'wb') as f:
-                                f.write(r.content)
-                            downloaded.append(save_path)
-                            
+            # إعطاء الأولوية للفيديو
+            video_urls = [u for u, t in found_urls if t == 'video']
+            photo_urls = [u for u, t in found_urls if t == 'photo']
+            
+            if video_urls:
+                target_url = video_urls[0]
+                r = requests.get(target_url, timeout=20)
+                if r.status_code == 200:
+                    save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_rapid.mp4")
+                    with open(save_path, 'wb') as f:
+                        f.write(r.content)
+                    downloaded.append(save_path)
+                    m_type = 'video'
+            elif photo_urls:
+                target_url = photo_urls[0]
+                r = requests.get(target_url, timeout=15)
+                if r.status_code == 200:
+                    save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_rapid.jpg")
+                    with open(save_path, 'wb') as f:
+                        f.write(r.content)
+                    downloaded.append(save_path)
+                    
             if downloaded:
                 return downloaded, m_type
+        else:
+            print(f"[ERROR] RapidAPI returned {response.status_code}: {response.text}")
     except Exception as e:
         print(f"[ERROR] RapidAPI Instagram failed: {e}")
     return [], None

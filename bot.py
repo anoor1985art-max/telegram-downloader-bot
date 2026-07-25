@@ -471,12 +471,12 @@ def extract_instagram_rapidapi(url, unique_id):
     if not RAPIDAPI_KEY:
         return [], None
     try:
-        # واجهة Instagram Reels Downloader API (EaseApi)
-        api_url = "https://instagram-reels-downloader-api.p.rapidapi.com/download"
+        # واجهة Instagram Downloader (By Kk Creation)
+        api_url = "https://instagram-downloader-download-instagram-stories-videos4.p.rapidapi.com/convert"
         querystring = {"url": url}
         headers = {
             "x-rapidapi-key": RAPIDAPI_KEY,
-            "x-rapidapi-host": "instagram-reels-downloader-api.p.rapidapi.com"
+            "x-rapidapi-host": "instagram-downloader-download-instagram-stories-videos4.p.rapidapi.com"
         }
         
         response = requests.get(api_url, headers=headers, params=querystring, timeout=20)

@@ -1742,29 +1742,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                         print(f"[AUTO-MERGE FAILED]: {auto_err}")
 
         if len(downloaded_files) > 1 and format_type != 'mp3':
-            # Album Gallery Viewer Mode
-            cached_files[f"{unique_id}_album"] = {
-                "files": downloaded_files,
-                "selected": [True] * len(downloaded_files),
-                "index": 0,
-                "detected_type": detected_type
-            }
-            schedule_file_cleanup(f"{unique_id}_album", 86400)
-            
-            markup = get_album_viewer_markup(unique_id, 0, len(downloaded_files), True)
-            first_file = downloaded_files[0]
-            try:
-                bot.delete_message(chat_id, status_msg.message_id) # Delete status message
-            except: pass
-            
-            with open(first_file, 'rb') as f:
-                caption_text = f"📸 <b>تم العثور على ألبوم يحتوي على {len(downloaded_files)} مقاطع/صور!</b>\n\nاستخدم الأزرار أدناه للتقليب وتحديد ما تريد سحبه ثم اضغط تحميل."
-                if first_file.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) or detected_type == 'photo':
-                    bot.send_photo(chat_id, f, caption=caption_text, reply_markup=markup)
-                else:
-                    bot.send_video(chat_id, f, caption=caption_text, reply_markup=markup)
-            
-            # Prevent the else block from executing because we handled it
+            send_downloaded_group(chat_id, downloaded_files, unique_id, detected_type)
             success = True
         else:
             filepath = downloaded_files[0]

@@ -1626,7 +1626,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                     markup = types.InlineKeyboardMarkup(row_width=1)
                     markup.add(
                         types.InlineKeyboardButton("🛠️ أدوات تعديل وقص هذا الفيديو", callback_data=f"edit_start|{unique_id}"),
-                        types.InlineKeyboardButton("🎵 استخراج الصوت (MP3) من هذا الفيديو", callback_data=f"dl_mp3|{url}")
+                        types.InlineKeyboardButton("🎵 استخراج الصوت (MP3) من هذا الفيديو", callback_data=f"edit_audio|{unique_id}")
                     )
                     
                     if file_size_mb <= 49.5:

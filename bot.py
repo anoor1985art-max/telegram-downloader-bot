@@ -1406,6 +1406,167 @@ def handle_convert_to_mp3(call):
         args=(call.message, status_msg, url, 'mp3')
     ).start()
 
+
+# --- Album Gallery Viewer ---
+def get_album_viewer_markup(unique_id, index, total, is_selected):
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    
+    # Navigation row
+    prev_btn = types.InlineKeyboardButton("◀️ السابق", callback_data=f"alb_nav|{unique_id}|prev")
+    count_btn = types.InlineKeyboardButton(f"{index + 1} / {total}", callback_data=f"alb_noop|{unique_id}")
+    next_btn = types.InlineKeyboardButton("التالي ▶️", callback_data=f"alb_nav|{unique_id}|next")
+    markup.row(prev_btn, count_btn, next_btn)
+    
+    # Selection row
+    sel_text = "✅ محدد للتحميل (اضغط للإلغاء)" if is_selected else "❌ غير محدد (اضغط للتحديد)"
+    markup.row(types.InlineKeyboardButton(sel_text, callback_data=f"alb_tog|{unique_id}|{index}"))
+    
+    # Done row
+    markup.row(types.InlineKeyboardButton("📥 إرسال الصور والمقاطع المحددة", callback_data=f"alb_done|{unique_id}"))
+    return markup
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("alb_noop|"))
+def handle_alb_noop(call):
+    bot.answer_callback_query(call.id, "")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("alb_nav|"))
+def handle_alb_nav(call):
+    parts = call.data.split("|")
+    unique_id = parts[1]
+    direction = parts[2]
+    
+    album_data = cached_files.get(f"{unique_id}_album")
+    if not album_data:
+        bot.answer_callback_query(call.id, "❌ انتهت صلاحية الألبوم. يرجى إرسال الرابط مجدداً.", show_alert=True)
+        return
+        
+    files = album_data['files']
+    selected = album_data['selected']
+    current_index = album_data['index']
+    
+    if direction == "next":
+        current_index = (current_index + 1) % len(files)
+    elif direction == "prev":
+        current_index = (current_index - 1) % len(files)
+        
+    album_data['index'] = current_index
+    
+    markup = get_album_viewer_markup(unique_id, current_index, len(files), selected[current_index])
+    file_path = files[current_index]
+    
+    try:
+        with open(file_path, 'rb') as f:
+            if file_path.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                media = types.InputMediaPhoto(f)
+            else:
+                media = types.InputMediaVideo(f)
+            bot.edit_message_media(media, call.message.chat.id, call.message.message_id, reply_markup=markup)
+    except Exception as e:
+        print(f"[ERROR] Gallery navigation: {e}")
+    bot.answer_callback_query(call.id, "")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("alb_tog|"))
+def handle_alb_tog(call):
+    parts = call.data.split("|")
+    unique_id = parts[1]
+    index = int(parts[2])
+    
+    album_data = cached_files.get(f"{unique_id}_album")
+    if not album_data:
+        bot.answer_callback_query(call.id, "❌ انتهت صلاحية الألبوم.", show_alert=True)
+        return
+        
+    selected = album_data['selected']
+    selected[index] = not selected[index]
+    
+    markup = get_album_viewer_markup(unique_id, album_data['index'], len(album_data['files']), selected[album_data['index']])
+    try:
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+    except Exception:
+        pass
+    bot.answer_callback_query(call.id, "✅ تم التحديث")
+
+def send_downloaded_group(chat_id, downloaded_files, unique_id, detected_type):
+    media_group = []
+    files_to_close = []
+    for filepath in downloaded_files[:10]:
+        f = open(filepath, 'rb')
+        files_to_close.append(f)
+        if filepath.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) or detected_type == 'photo':
+            media_group.append(types.InputMediaPhoto(f))
+        else:
+            media_group.append(types.InputMediaVideo(f, supports_streaming=True))
+    
+    if media_group:
+        bot.send_media_group(chat_id, media_group, reply_to_message_id=None)
+    
+    for f in files_to_close:
+        f.close()
+        
+    markup_group = types.InlineKeyboardMarkup(row_width=1)
+    has_video = False
+    for idx, filepath in enumerate(downloaded_files[:5]):
+        if not filepath.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) and not detected_type == 'photo':
+            has_video = True
+            sub_unique = f"{unique_id}_g{idx}"
+            cached_files[sub_unique] = {"file_path": filepath, "chat_id": chat_id}
+            schedule_file_cleanup(sub_unique, 86400)
+            markup_group.add(types.InlineKeyboardButton(f"🛠️ أدوات تعديل وقص المقطع رقم {idx+1}", callback_data=f"edit_start|{sub_unique}"))
+    
+    if has_video:
+        markup_group.add(types.InlineKeyboardButton("🎬 دمج وربط هذه المقاطع معاً في فيديو موحد ⚡", callback_data=f"vmerge_group_run|{unique_id}"))
+        cached_files[f"{unique_id}_group"] = {"files": downloaded_files, "chat_id": chat_id}
+        schedule_file_cleanup(f"{unique_id}_group", 86400)
+        bot.send_message(
+            chat_id,
+            "🛠️ <b>أدوات التعديل والقص والدمج للمقاطع المستلمة أعلاه:</b>",
+            reply_markup=markup_group
+        )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("alb_done|"))
+def handle_alb_done(call):
+    unique_id = call.data.split("|")[1]
+    album_data = cached_files.get(f"{unique_id}_album")
+    if not album_data:
+        bot.answer_callback_query(call.id, "❌ انتهت صلاحية الألبوم.", show_alert=True)
+        return
+        
+    bot.answer_callback_query(call.id, "⏳ جاري إرسال العناصر المحددة...")
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
+    
+    files = album_data['files']
+    selected = album_data['selected']
+    detected_type = album_data.get('detected_type', 'video')
+    
+    final_files = [f for idx, f in enumerate(files) if selected[idx]]
+    
+    if not final_files:
+        bot.send_message(call.message.chat.id, "❌ لم تقم بتحديد أي شيء للتحميل!")
+        return
+        
+    if len(final_files) == 1:
+        # Just send single file
+        filepath = final_files[0]
+        file_size_mb = os.path.getsize(filepath) / (1024 * 1024)
+        with open(filepath, 'rb') as f:
+            if filepath.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) or detected_type == 'photo':
+                bot.send_photo(call.message.chat.id, f, caption="", reply_to_message_id=None, timeout=300)
+            else:
+                markup = types.InlineKeyboardMarkup(row_width=1)
+                markup.add(
+                    types.InlineKeyboardButton("🛠️ أدوات تعديل وقص هذا الفيديو", callback_data=f"edit_start|{unique_id}"),
+                    types.InlineKeyboardButton("🎵 استخراج الصوت (MP3) من هذا الفيديو", callback_data=f"edit_audio|{unique_id}")
+                )
+                if file_size_mb <= 49.5:
+                    bot.send_video(call.message.chat.id, f, caption="", supports_streaming=True, reply_to_message_id=None, reply_markup=markup, timeout=300)
+                else:
+                    bot.send_document(call.message.chat.id, f, caption="", reply_to_message_id=None, reply_markup=markup, timeout=300)
+    else:
+        # Send group
+        send_downloaded_group(call.message.chat.id, final_files, unique_id, detected_type)
 def process_and_send_download(message, status_msg, url, format_type='video'):
     chat_id = message.chat.id if hasattr(message, 'chat') else message.from_user.id
     unique_id = uuid.uuid4().hex[:8]
@@ -1581,41 +1742,31 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                         print(f"[AUTO-MERGE FAILED]: {auto_err}")
 
         if len(downloaded_files) > 1 and format_type != 'mp3':
-            media_group = []
-            files_to_close = []
-            for filepath in downloaded_files[:10]:
-                f = open(filepath, 'rb')
-                files_to_close.append(f)
-                if filepath.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) or detected_type == 'photo':
-                    media_group.append(types.InputMediaPhoto(f))
+            # Album Gallery Viewer Mode
+            cached_files[f"{unique_id}_album"] = {
+                "files": downloaded_files,
+                "selected": [True] * len(downloaded_files),
+                "index": 0,
+                "detected_type": detected_type
+            }
+            schedule_file_cleanup(f"{unique_id}_album", 86400)
+            
+            markup = get_album_viewer_markup(unique_id, 0, len(downloaded_files), True)
+            first_file = downloaded_files[0]
+            try:
+                bot.delete_message(chat_id, status_msg.message_id) # Delete status message
+            except: pass
+            
+            with open(first_file, 'rb') as f:
+                caption_text = f"📸 <b>تم العثور على ألبوم يحتوي على {len(downloaded_files)} مقاطع/صور!</b>\n\nاستخدم الأزرار أدناه للتقليب وتحديد ما تريد سحبه ثم اضغط تحميل."
+                if first_file.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) or detected_type == 'photo':
+                    bot.send_photo(chat_id, f, caption=caption_text, reply_markup=markup)
                 else:
-                    media_group.append(types.InputMediaVideo(f, supports_streaming=True))
+                    bot.send_video(chat_id, f, caption=caption_text, reply_markup=markup)
             
-            if media_group:
-                bot.send_media_group(chat_id, media_group, reply_to_message_id=None)
-            
-            for f in files_to_close:
-                f.close()
-                
-            # 💡 إرسال أزرار التحكم والتعديل والدمج للمقاطع المتعددة المستلمة!
-            markup_group = types.InlineKeyboardMarkup(row_width=1)
-            for idx, filepath in enumerate(downloaded_files[:5]):
-                if not filepath.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) and not detected_type == 'photo':
-                    sub_unique = f"{unique_id}_g{idx}"
-                    cached_files[sub_unique] = {"file_path": filepath, "chat_id": chat_id}
-                    schedule_file_cleanup(sub_unique, 86400)
-                    markup_group.add(types.InlineKeyboardButton(f"🛠️ أدوات تعديل وقص المقطع رقم {idx+1}", callback_data=f"edit_start|{sub_unique}"))
-            
-            markup_group.add(types.InlineKeyboardButton("🎬 دمج وربط هذه المقاطع معاً في فيديو موحد ⚡", callback_data=f"vmerge_group_run|{unique_id}"))
-            
-            cached_files[f"{unique_id}_group"] = {"files": downloaded_files, "chat_id": chat_id}
-            schedule_file_cleanup(f"{unique_id}_group", 86400)
-            
-            bot.send_message(
-                chat_id,
-                "🛠️ <b>أدوات التعديل والقص والدمج للمقاطع المستلمة أعلاه:</b>",
-                reply_markup=markup_group
-            )
+            # Prevent the else block from executing because we handled it
+            success = True
+            return
         else:
             filepath = downloaded_files[0]
             file_size_mb = os.path.getsize(filepath) / (1024 * 1024)

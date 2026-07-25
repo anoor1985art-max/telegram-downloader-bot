@@ -1766,7 +1766,6 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
             
             # Prevent the else block from executing because we handled it
             success = True
-            return
         else:
             filepath = downloaded_files[0]
             file_size_mb = os.path.getsize(filepath) / (1024 * 1024)

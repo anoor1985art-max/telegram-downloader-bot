@@ -1636,7 +1636,8 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                             caption="",  # بدون نصوص أو أشرطة مزعجة
                             supports_streaming=True,
                             reply_to_message_id=None,
-                            reply_markup=markup
+                            reply_markup=markup,
+                            timeout=300
                         )
                     else:
                         bot.send_document(
@@ -1644,7 +1645,8 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                             f,
                             caption="",
                             reply_to_message_id=None,
-                            reply_markup=markup
+                            reply_markup=markup,
+                            timeout=300
                         )
 
         # Cache the downloaded file for 2 minutes to allow editing!

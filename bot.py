@@ -508,28 +508,43 @@ def extract_instagram_rapidapi(url, unique_id):
             downloaded = []
             m_type = 'photo'
             
-            # إعطاء الأولوية للفيديو
-            video_urls = [u for u, t in found_urls if t == 'video']
-            photo_urls = [u for u, t in found_urls if t == 'photo']
+            # إعطاء الأولوية للفيديو مع إزالة التكرار
+            video_urls = list(dict.fromkeys([u for u, t in found_urls if t == 'video']))
+            photo_urls = list(dict.fromkeys([u for u, t in found_urls if t == 'photo']))
             
-            if video_urls:
-                target_url = video_urls[0]
-                r = requests.get(target_url, timeout=20)
-                if r.status_code == 200:
-                    save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_rapid.mp4")
-                    with open(save_path, 'wb') as f:
-                        f.write(r.content)
-                    downloaded.append(save_path)
-                    m_type = 'video'
-            elif photo_urls:
-                target_url = photo_urls[0]
-                r = requests.get(target_url, timeout=15)
-                if r.status_code == 200:
-                    save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_rapid.jpg")
-                    with open(save_path, 'wb') as f:
-                        f.write(r.content)
-                    downloaded.append(save_path)
-                    
+            # إذا كان هناك فيديو واحد وصورة واحدة، فالصورة غالباً مجرد غلاف (Thumbnail)، نتجاهلها
+            if len(video_urls) == 1 and len(photo_urls) == 1:
+                photo_urls = []
+            elif len(video_urls) > 1:
+                # أحياناً ترجع الواجهة نفس الفيديو بدقات مختلفة، نكتفي بأول واحد لو كان رابطاً واحداً في الأصل
+                # ولكن لدعم الألبومات، سنحملها كلها. سنكتفي بأول 10 مقاطع لتجنب الضغط
+                video_urls = video_urls[:10]
+            
+            photo_urls = photo_urls[:10] # كحد أقصى 10 صور للألبوم
+
+            for idx, target_url in enumerate(video_urls):
+                try:
+                    r = requests.get(target_url, timeout=20)
+                    if r.status_code == 200:
+                        save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_v_{idx}.mp4")
+                        with open(save_path, 'wb') as f:
+                            f.write(r.content)
+                        downloaded.append(save_path)
+                        m_type = 'video'
+                except: pass
+
+            for idx, target_url in enumerate(photo_urls):
+                try:
+                    r = requests.get(target_url, timeout=15)
+                    if r.status_code == 200:
+                        save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_p_{idx}.jpg")
+                        with open(save_path, 'wb') as f:
+                            f.write(r.content)
+                        downloaded.append(save_path)
+                        if m_type != 'video':
+                            m_type = 'photo'
+                except: pass
+
             if downloaded:
                 return downloaded, m_type
         else:

@@ -1609,7 +1609,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                     detected_type = m_type
 
             # 3. محرك yt-dlp المتكامل للفيديوهات والصوتيات واليوتيوب وباقي المنصات
-            if not downloaded_files and 'instagram.com' not in url.lower():
+            if not downloaded_files and 'instagram.com' not in url.lower() and 'threads.net' not in url.lower():
                 ydl_opts = {
                     'outtmpl': output_template,
                     'ffmpeg_location': FFMPEG_PATH,
@@ -1710,8 +1710,8 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                             print(f"[ERROR] Cobalt fallback ({cobalt_url}) failed: {cob_err}")
                             continue
 
-                    # 4.5. محرك VKR المساعد (Fallback إضافي لإنستغرام)
-                    if not downloaded_files and 'instagram.com' in url:
+                    # 4.5. محرك VKR المساعد (Fallback إضافي لإنستغرام وثردز)
+                    if not downloaded_files and ('instagram.com' in url.lower() or 'threads.net' in url.lower()):
                         try:
                             vkr_url = f"https://api.vkrdownloader.vercel.app/server?vkr={clean_url}"
                             r = requests.get(vkr_url, timeout=15)

@@ -1600,18 +1600,16 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                     downloaded_files = files
                     detected_type = m_type
 
-            # 2. إذا لم يتم التحميل بعد، أو كان إنستغرام صورة / منشور، جرب الساحب المتخصص
+            # 2. إذا لم يتم التحميل بعد، أو كان إنستغرام، جرب الساحب المتخصص السريع
             if not downloaded_files and format_type != 'mp3' and ('instagram.com/p/' in url.lower() or 'instagram.com/reel/' in url.lower()):
                 # أولوية لساحب RapidAPI إذا كان المفتاح موجوداً
                 files, m_type = extract_instagram_rapidapi(url, unique_id)
-                if not files:
-                    files, m_type = extract_instagram_clean(url, unique_id)
                 if files:
                     downloaded_files = files
                     detected_type = m_type
 
             # 3. محرك yt-dlp المتكامل للفيديوهات والصوتيات واليوتيوب وباقي المنصات
-            if not downloaded_files:
+            if not downloaded_files and 'instagram.com' not in url.lower():
                 ydl_opts = {
                     'outtmpl': output_template,
                     'ffmpeg_location': FFMPEG_PATH,
@@ -1669,21 +1667,69 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                         if fname.startswith(unique_id):
                             downloaded_files.append(os.path.join(DOWNLOAD_DIR, fname))
 
-                # 4. محرك Cobalt API المساعد يوتيوب وإنستغرام
-                if not downloaded_files and ('youtube.com' in url or 'youtu.be' in url or 'instagram.com' in url):
-                    try:
-                        cobalt_url = "https://api.cobalt.tools/api/json"
-                        payload = {'url': url, 'downloadMode': 'audio' if format_type == 'mp3' else 'auto'}
-                        r = requests.post(cobalt_url, json=payload, headers={'Accept': 'application/json', 'Content-Type': 'application/json'}, timeout=15)
-                        if r.status_code == 200 and r.json().get('url'):
-                            media_data = requests.get(r.json()['url'], timeout=30).content
-                            ext = ".mp3" if format_type == 'mp3' else ".mp4"
-                            fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_cobalt{ext}")
-                            with open(fname, 'wb') as f:
-                                f.write(media_data)
-                            downloaded_files.append(fname)
-                    except Exception as cob_err:
-                        print(f"[ERROR] Cobalt fallback failed: {cob_err}")
+                # 4. محرك Cobalt API المساعد يوتيوب وإنستغرام وثردز
+                if not downloaded_files and ('youtube.com' in url or 'youtu.be' in url or 'instagram.com' in url or 'threads.net' in url):
+                    clean_url = url.split('?')[0] if 'instagram.com' in url or 'threads.net' in url else url
+                    
+                    # Cobalt v10 API instances (no /api/json needed)
+                    instances = [
+                        "https://co.wuk.sh/",
+                        "https://cobalt.qwy2.dev/",
+                        "https://cobalt.tools.wuk.sh/"
+                    ]
+                    
+                    for cobalt_url in instances:
+                        if downloaded_files: break
+                        try:
+                            payload = {'url': clean_url, 'downloadMode': 'audio' if format_type == 'mp3' else 'auto'}
+                            r = requests.post(cobalt_url, json=payload, headers={'Accept': 'application/json', 'Content-Type': 'application/json'}, timeout=15)
+                            if r.status_code == 200:
+                                res_json = r.json()
+                                if res_json.get('url'):
+                                    media_data = requests.get(res_json['url'], timeout=30).content
+                                    ext = ".mp3" if format_type == 'mp3' else ".mp4"
+                                    fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_cobalt{ext}")
+                                    with open(fname, 'wb') as f:
+                                        f.write(media_data)
+                                    downloaded_files.append(fname)
+                                    break
+                                elif res_json.get('status') == 'picker' and res_json.get('picker'):
+                                    for idx, item in enumerate(res_json['picker'][:10]):
+                                        m_url = item.get('url')
+                                        if m_url:
+                                            media_data = requests.get(m_url, timeout=30).content
+                                            ext = ".mp4" if item.get('type') == 'video' else ".jpg"
+                                            fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_cobalt_{idx}{ext}")
+                                            with open(fname, 'wb') as f:
+                                                f.write(media_data)
+                                            downloaded_files.append(fname)
+                                    if downloaded_files:
+                                        detected_type = 'video' if any(f.endswith('.mp4') for f in downloaded_files) else 'photo'
+                                        break
+                        except Exception as cob_err:
+                            print(f"[ERROR] Cobalt fallback ({cobalt_url}) failed: {cob_err}")
+                            continue
+
+                    # 4.5. محرك VKR المساعد (Fallback إضافي لإنستغرام)
+                    if not downloaded_files and 'instagram.com' in url:
+                        try:
+                            vkr_url = f"https://api.vkrdownloader.vercel.app/server?vkr={clean_url}"
+                            r = requests.get(vkr_url, timeout=15)
+                            if r.status_code == 200:
+                                data = r.json()
+                                downloads = data.get('downloads', [])
+                                if downloads:
+                                    best_download = downloads[0] # عادة الأول هو الأفضل
+                                    d_url = best_download.get('url')
+                                    if d_url:
+                                        media_data = requests.get(d_url, timeout=30).content
+                                        ext = ".mp4" if 'mp4' in best_download.get('extension', 'mp4') else ".jpg"
+                                        fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_vkr{ext}")
+                                        with open(fname, 'wb') as f:
+                                            f.write(media_data)
+                                        downloaded_files.append(fname)
+                        except Exception as vkr_err:
+                            print(f"[ERROR] VKR fallback failed: {vkr_err}")
 
                 # 5. إذا فشل yt-dlp في إنستغرام وبقي المحتوى فارغاً، جرب مرة أخرى بساحب الصور
                 if not downloaded_files and 'instagram.com' in url.lower():

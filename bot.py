@@ -1567,6 +1567,40 @@ def handle_alb_done(call):
     else:
         # Send group
         send_downloaded_group(call.message.chat.id, final_files, unique_id, detected_type)
+def extract_media_from_rapidapi_threads(data):
+    urls = []
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, str) and v.startswith('http'):
+                if '.mp4' in v or 'video' in k.lower():
+                    urls.append((v, 'video'))
+                elif '.jpg' in v or '.png' in v or 'image' in k.lower() or 'pic' in k.lower():
+                    urls.append((v, 'photo'))
+            else:
+                urls.extend(extract_media_from_rapidapi_threads(v))
+    elif isinstance(data, list):
+        for item in data:
+            urls.extend(extract_media_from_rapidapi_threads(item))
+    return urls
+
+def extract_threads_rapidapi(url):
+    rapidapi_key = "97d4c0ace8msh93f3dbb2cadccd6p1afb67jsn9fe7117bcb6a"
+    api_url = "https://threads-downloader.p.rapidapi.com/v1/threads/download"
+    headers = {
+        "x-rapidapi-key": rapidapi_key,
+        "x-rapidapi-host": "threads-downloader.p.rapidapi.com",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+    payload = {"url": url}
+    try:
+        r = requests.post(api_url, json=payload, headers=headers, timeout=20)
+        if r.status_code == 200:
+            return extract_media_from_rapidapi_threads(r.json())
+    except Exception as e:
+        print(f"[ERROR] Threads RapidAPI: {e}")
+    return []
+
 def process_and_send_download(message, status_msg, url, format_type='video'):
     # تنظيف الرابط الأساسي
     url = url.strip()
@@ -1611,6 +1645,25 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                 if files:
                     downloaded_files = files
                     detected_type = m_type
+
+            # 2.5 محاولة التحميل عبر RapidAPI (لثردز فقط)
+            if not downloaded_files and 'threads.net' in url.lower():
+                try:
+                    rapid_threads = extract_threads_rapidapi(url)
+                    if rapid_threads:
+                        # rapid_threads is a list of (url, type)
+                        for idx, (m_url, m_type) in enumerate(rapid_threads):
+                            media_data = requests.get(m_url, timeout=30).content
+                            ext = ".mp4" if m_type == 'video' else ".jpg"
+                            fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_rapid_threads_{idx}{ext}")
+                            with open(fname, 'wb') as f:
+                                f.write(media_data)
+                            downloaded_files.append(fname)
+                            detected_type = m_type
+                            if m_type == 'video':
+                                break # Stop at first video found
+                except Exception as e:
+                    print(f"[ERROR] Threads RapidAPI Download Error: {e}")
 
             # 3. محرك yt-dlp المتكامل للفيديوهات والصوتيات واليوتيوب وباقي المنصات
             if not downloaded_files and 'instagram.com' not in url.lower() and 'threads.net' not in url.lower():

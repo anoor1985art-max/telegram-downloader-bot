@@ -1568,7 +1568,14 @@ def handle_alb_done(call):
         # Send group
         send_downloaded_group(call.message.chat.id, final_files, unique_id, detected_type)
 def process_and_send_download(message, status_msg, url, format_type='video'):
-    url = url.strip().replace('threads.com', 'threads.net')
+    import re
+    # تنظيف الرابط الأساسي
+    url = url.strip()
+    if 'threads' in url.lower():
+        match = re.search(r'/post/([A-Za-z0-9_-]+)', url)
+        if match:
+            url = f"https://www.instagram.com/p/{match.group(1)}/"
+            
     chat_id = message.chat.id if hasattr(message, 'chat') else message.from_user.id
     unique_id = uuid.uuid4().hex[:8]
     output_template = os.path.join(DOWNLOAD_DIR, f"{unique_id}_%(title).50s.%(ext)s")

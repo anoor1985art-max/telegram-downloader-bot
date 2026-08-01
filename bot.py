@@ -1609,7 +1609,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                     detected_type = m_type
 
             # 3. محرك yt-dlp المتكامل للفيديوهات والصوتيات واليوتيوب وباقي المنصات
-            if not downloaded_files and 'instagram.com' not in url.lower() and 'threads.net' not in url.lower():
+            if not downloaded_files and 'instagram.com' not in url.lower():
                 ydl_opts = {
                     'outtmpl': output_template,
                     'ffmpeg_location': FFMPEG_PATH,

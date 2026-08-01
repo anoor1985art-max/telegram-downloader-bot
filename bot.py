@@ -1568,13 +1568,9 @@ def handle_alb_done(call):
         # Send group
         send_downloaded_group(call.message.chat.id, final_files, unique_id, detected_type)
 def process_and_send_download(message, status_msg, url, format_type='video'):
-    import re
     # تنظيف الرابط الأساسي
     url = url.strip()
-    if 'threads' in url.lower():
-        match = re.search(r'/post/([A-Za-z0-9_-]+)', url)
-        if match:
-            url = f"https://www.instagram.com/p/{match.group(1)}/"
+    url = url.replace('threads.com', 'threads.net')
             
     chat_id = message.chat.id if hasattr(message, 'chat') else message.from_user.id
     unique_id = uuid.uuid4().hex[:8]
@@ -1617,7 +1613,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                     detected_type = m_type
 
             # 3. محرك yt-dlp المتكامل للفيديوهات والصوتيات واليوتيوب وباقي المنصات
-            if not downloaded_files and 'instagram.com' not in url.lower():
+            if not downloaded_files and 'instagram.com' not in url.lower() and 'threads.net' not in url.lower():
                 ydl_opts = {
                     'outtmpl': output_template,
                     'ffmpeg_location': FFMPEG_PATH,

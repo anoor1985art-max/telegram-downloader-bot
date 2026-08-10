@@ -471,12 +471,12 @@ def extract_instagram_rapidapi(url, unique_id):
     if not RAPIDAPI_KEY:
         return [], None
     try:
-        # واجهة Instagram Downloader (By Kk Creation)
-        api_url = "https://instagram-downloader-download-instagram-stories-videos4.p.rapidapi.com/convert"
+        # واجهة Instagram Downloader (By mohammadtahapourabbas)
+        api_url = "https://instagram-downloader-scraper-reels-igtv-posts-stories.p.rapidapi.com/scraper"
         querystring = {"url": url}
         headers = {
             "x-rapidapi-key": RAPIDAPI_KEY,
-            "x-rapidapi-host": "instagram-downloader-download-instagram-stories-videos4.p.rapidapi.com"
+            "x-rapidapi-host": "instagram-downloader-scraper-reels-igtv-posts-stories.p.rapidapi.com"
         }
         
         response = requests.get(api_url, headers=headers, params=querystring, timeout=20)

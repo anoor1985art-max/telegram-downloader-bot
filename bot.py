@@ -490,7 +490,7 @@ def extract_instagram_rapidapi(url, unique_id):
                         if isinstance(v, str) and v.startswith('http'):
                             if '.mp4' in v or 'video' in k.lower():
                                 urls.append((v, 'video'))
-                            elif '.jpg' in v or 'image' in k.lower() or 'cover' in k.lower() or 'thumbnail' in k.lower():
+                            elif '.jpg' in v or '.webp' in v or '.png' in v or 'image' in k.lower() or 'cover' in k.lower() or 'thumbnail' in k.lower() or 'media' in k.lower() or 'url' in k.lower():
                                 urls.append((v, 'photo'))
                         else:
                             urls.extend(find_media_urls(v))
@@ -524,7 +524,7 @@ def extract_instagram_rapidapi(url, unique_id):
 
             for idx, target_url in enumerate(video_urls):
                 try:
-                    r = requests.get(target_url, timeout=20)
+                    r = requests.get(target_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=20)
                     if r.status_code == 200:
                         save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_v_{idx}.mp4")
                         with open(save_path, 'wb') as f:
@@ -535,7 +535,7 @@ def extract_instagram_rapidapi(url, unique_id):
 
             for idx, target_url in enumerate(photo_urls):
                 try:
-                    r = requests.get(target_url, timeout=15)
+                    r = requests.get(target_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
                     if r.status_code == 200:
                         save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_p_{idx}.jpg")
                         with open(save_path, 'wb') as f:

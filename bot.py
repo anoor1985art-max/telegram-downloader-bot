@@ -487,12 +487,14 @@ def extract_instagram_rapidapi(url, unique_id):
                 urls = []
                 if isinstance(obj, dict):
                     for k, v in obj.items():
-                        if isinstance(v, str) and v.startswith('http'):
-                            if '.mp4' in v or 'video' in k.lower():
-                                urls.append((v, 'video'))
-                            elif '.jpg' in v or '.webp' in v or '.png' in v or 'image' in k.lower() or 'cover' in k.lower() or 'thumbnail' in k.lower() or 'media' in k.lower() or 'url' in k.lower():
-                                urls.append((v, 'photo'))
-                        else:
+                        if isinstance(v, str):
+                            if v.startswith('http') or v.startswith('//'):
+                                clean_v = 'https:' + v if v.startswith('//') else v
+                                if '.mp4' in clean_v or 'video' in k.lower():
+                                    urls.append((clean_v, 'video'))
+                                elif '.jpg' in clean_v or '.webp' in clean_v or '.png' in clean_v or 'image' in k.lower() or 'cover' in k.lower() or 'thumbnail' in k.lower() or 'media' in k.lower() or 'url' in k.lower():
+                                    urls.append((clean_v, 'photo'))
+                        if isinstance(v, (dict, list)):
                             urls.extend(find_media_urls(v))
                 elif isinstance(obj, list):
                     for item in obj:
@@ -535,7 +537,16 @@ def extract_instagram_rapidapi(url, unique_id):
 
             for idx, target_url in enumerate(photo_urls):
                 try:
-                    r = requests.get(target_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+                    img_headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Referer': 'https://www.instagram.com/',
+                        'Sec-Fetch-Dest': 'image',
+                        'Sec-Fetch-Mode': 'no-cors',
+                        'Sec-Fetch-Site': 'cross-site'
+                    }
+                    r = requests.get(target_url, headers=img_headers, timeout=15)
                     if r.status_code == 200:
                         save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_p_{idx}.jpg")
                         with open(save_path, 'wb') as f:

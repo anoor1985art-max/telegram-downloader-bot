@@ -569,6 +569,21 @@ def extract_instagram_rapidapi(url, unique_id):
 # ==========================================
 URL_REGEX = re.compile(r'https?://[^\s]+')
 
+@bot.message_handler(commands=['debug_insta'])
+def handle_debug_insta(message):
+    try:
+        url = message.text.split(' ', 1)[1]
+        api_url = "https://instagram-downloader-scraper-reels-igtv-posts-stories.p.rapidapi.com/scraper"
+        querystring = {"url": url}
+        headers = {
+            "x-rapidapi-key": RAPIDAPI_KEY,
+            "x-rapidapi-host": "instagram-downloader-scraper-reels-igtv-posts-stories.p.rapidapi.com"
+        }
+        r = requests.get(api_url, headers=headers, params=querystring, timeout=20)
+        bot.reply_to(message, f"Status: {r.status_code}\n\nResponse:\n{r.text[:3000]}")
+    except Exception as e:
+        bot.reply_to(message, f"Error: {e}")
+
 @bot.message_handler(func=lambda message: bool(URL_REGEX.search(message.text or "")))
 def handle_url_message(message):
     urls = URL_REGEX.findall(message.text)

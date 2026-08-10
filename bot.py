@@ -1666,7 +1666,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                     print(f"[ERROR] Threads RapidAPI Download Error: {e}")
 
             # 3. محرك yt-dlp المتكامل للفيديوهات والصوتيات واليوتيوب وباقي المنصات
-            if not downloaded_files and 'instagram.com' not in url.lower() and 'threads.net' not in url.lower():
+            if not downloaded_files and 'threads.net' not in url.lower():
                 ydl_opts = {
                     'outtmpl': output_template,
                     'ffmpeg_location': FFMPEG_PATH,
@@ -1684,6 +1684,11 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                     }
                 }
+                
+                # استخدام ملف الكوكيز إذا كان موجوداً لتجاوز حظر انستجرام
+                if os.path.exists('cookies.txt'):
+                    ydl_opts['cookiefile'] = 'cookies.txt'
+
                 if 'instagram.com' in url or 'cdninstagram.com' in url:
                     ydl_opts['http_headers']['Referer'] = 'https://www.instagram.com/'
 

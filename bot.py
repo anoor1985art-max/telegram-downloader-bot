@@ -434,7 +434,7 @@ def extract_instagram_clean(url, unique_id):
     try:
         clean_url = url.split('?')[0].rstrip('/')
         embed_url = f"{clean_url}/embed/captioned/"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         import html
         html_content = requests.get(embed_url, headers=headers, timeout=15).text
         soup = BeautifulSoup(html_content, 'html.parser')
@@ -451,7 +451,8 @@ def extract_instagram_clean(url, unique_id):
                         media_urls.append(clean_src)
 
         downloaded = []
-        for idx, m_url in enumerate(media_urls[:10]):
+        # الاكتفاء بالصورة الأولى فقط من صفحة embed لتجنب تحميل صور عشوائية من المنشورات المقترحة
+        for idx, m_url in enumerate(media_urls[:1]):
             save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_{idx}.jpg")
             r = requests.get(m_url, headers=headers, timeout=15)
             if r.status_code == 200 and len(r.content) > 5000:
@@ -460,8 +461,67 @@ def extract_instagram_clean(url, unique_id):
                 downloaded.append(save_path)
         if downloaded:
             return downloaded, 'photo'
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[ERROR] extract_instagram_clean failed: {e}")
+    return [], None
+
+# ==========================================
+# سحب مخصص لألبومات إنستغرام عبر واجهات الويب العامة (SaveIG / IGDownloader)
+# ==========================================
+def extract_instagram_web_api(url, unique_id):
+    apis = [
+        "https://v3.igdownloader.app/api/ajaxSearch",
+        "https://saveig.app/api/ajaxSearch"
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest"
+    }
+    
+    for api_url in apis:
+        try:
+            headers["Origin"] = "https://" + api_url.split("/")[2]
+            headers["Referer"] = headers["Origin"] + "/"
+            
+            data = {"q": url, "t": "media", "lang": "en"}
+            r = requests.post(api_url, data=data, headers=headers, timeout=15)
+            if r.status_code == 200:
+                res_json = r.json()
+                if res_json.get("status") == "ok" and res_json.get("data"):
+                    html_data = res_json.get("data")
+                    soup = BeautifulSoup(html_data, 'html.parser')
+                    
+                    download_links = []
+                    for a_tag in soup.find_all('a', href=True):
+                        href = a_tag['href']
+                        if 'dl=1' in href or 'dl.php' in href or '.mp4' in href or '.jpg' in href or '.webp' in href:
+                            if href not in download_links:
+                                download_links.append(href)
+                    
+                    if download_links:
+                        downloaded = []
+                        m_type = 'photo'
+                        for idx, link in enumerate(download_links[:10]):
+                            try:
+                                media_res = requests.get(link, headers={'User-Agent': 'Mozilla/5.0'}, timeout=20)
+                                if media_res.status_code == 200:
+                                    ext = ".mp4" if "video" in media_res.headers.get("Content-Type", "") or ".mp4" in link else ".jpg"
+                                    if ext == ".mp4": m_type = 'video'
+                                    save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_webapi_{idx}{ext}")
+                                    with open(save_path, 'wb') as f:
+                                        f.write(media_res.content)
+                                    downloaded.append(save_path)
+                            except Exception:
+                                pass
+                        
+                        if downloaded:
+                            return downloaded, m_type
+        except Exception as e:
+            print(f"[ERROR] extract_instagram_web_api with {api_url} failed: {e}")
+            continue
+            
     return [], None
 
 # ==========================================
@@ -1664,13 +1724,9 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                     downloaded_files = files
                     detected_type = m_type
 
-            # 2. إذا لم يتم التحميل بعد، أو كان إنستغرام، جرب الساحب المتخصص السريع
+            # 2. أولوية لساحب RapidAPI تم تعطيلها ليكون التحميل بلا حدود (مجاني بالكامل)
             if not downloaded_files and format_type != 'mp3' and ('instagram.com/p/' in url.lower() or 'instagram.com/reel/' in url.lower()):
-                # أولوية لساحب RapidAPI إذا كان المفتاح موجوداً
-                files, m_type = extract_instagram_rapidapi(url, unique_id)
-                if files:
-                    downloaded_files = files
-                    detected_type = m_type
+                pass # تم التعطيل ليتم الاعتماد على yt-dlp والسحب المباشر للصور
 
             # 2.5 محاولة التحميل عبر RapidAPI (لثردز فقط)
             if not downloaded_files and 'threads.net' in url.lower():
@@ -1807,24 +1863,55 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                                 data = r.json()
                                 downloads = data.get('downloads', [])
                                 if downloads:
-                                    best_download = downloads[0] # عادة الأول هو الأفضل
-                                    d_url = best_download.get('url')
-                                    if d_url:
-                                        media_data = requests.get(d_url, timeout=30).content
-                                        ext = ".mp4" if 'mp4' in best_download.get('extension', 'mp4') else ".jpg"
-                                        fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_vkr{ext}")
-                                        with open(fname, 'wb') as f:
-                                            f.write(media_data)
-                                        downloaded_files.append(fname)
+                                    # تحميل جميع العناصر في حال كان ألبوماً
+                                    for idx, d in enumerate(downloads):
+                                        d_url = d.get('url')
+                                        if d_url:
+                                            media_data = requests.get(d_url, timeout=30).content
+                                            ext = ".mp4" if 'mp4' in d.get('extension', 'mp4') else ".jpg"
+                                            fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_vkr_{idx}{ext}")
+                                            with open(fname, 'wb') as f:
+                                                f.write(media_data)
+                                            downloaded_files.append(fname)
+                                    if downloaded_files:
+                                        detected_type = 'video' if any(f.endswith('.mp4') for f in downloaded_files) else 'photo'
                         except Exception as vkr_err:
                             print(f"[ERROR] VKR fallback failed: {vkr_err}")
 
-                # 5. إذا فشل yt-dlp في إنستغرام وبقي المحتوى فارغاً، جرب مرة أخرى بساحب الصور
+                # 4.6 محرك VKR المساعد لفيسبوك (تجاوز حماية فيسبوك)
+                if not downloaded_files and ('facebook.com' in url.lower() or 'fb.watch' in url.lower() or 'fb.gg' in url.lower() or 'fb.com' in url.lower()):
+                    try:
+                        vkr_url = f"https://api.vkrdownloader.vercel.app/server?vkr={url}"
+                        r = requests.get(vkr_url, timeout=15)
+                        if r.status_code == 200:
+                            data = r.json()
+                            downloads = data.get('downloads', [])
+                            if downloads:
+                                best_download = downloads[0]
+                                d_url = best_download.get('url')
+                                if d_url:
+                                    media_data = requests.get(d_url, timeout=40).content
+                                    ext = ".mp4" if 'mp4' in best_download.get('extension', 'mp4') else ".jpg"
+                                    fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_vkrfb{ext}")
+                                    with open(fname, 'wb') as f:
+                                        f.write(media_data)
+                                    downloaded_files.append(fname)
+                    except Exception as fb_err:
+                        print(f"[ERROR] VKR FB fallback failed: {fb_err}")
+
+                # 5. إذا فشل yt-dlp في إنستغرام وبقي المحتوى فارغاً، جرب مرة أخرى بساحب الصور والألبومات
                 if not downloaded_files and 'instagram.com' in url.lower():
-                    files, m_type = extract_instagram_clean(url, unique_id)
+                    # محاولة سحب الألبوم كاملاً عبر الـ Web APIs المجانية
+                    files, m_type = extract_instagram_web_api(url, unique_id)
                     if files:
                         downloaded_files = files
                         detected_type = m_type
+                    else:
+                        # كحل أخير جداً، نستخدم الساحب المباشر البسيط لصورة الغلاف فقط
+                        files, m_type = extract_instagram_clean(url, unique_id)
+                        if files:
+                            downloaded_files = files
+                            detected_type = m_type
 
             if not downloaded_files:
                 raise Exception("لم يتم العثور على ملفات وسائط متاحة للتحميل من هذا الرابط.")

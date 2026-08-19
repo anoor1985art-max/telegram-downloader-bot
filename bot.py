@@ -23,9 +23,9 @@ import imageio_ffmpeg
 # إعدادات البوت الأساسية
 # ==========================================
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv('env_config.txt')
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8660209792:AAEJpMoNB7W_oBefqDj32EggEzG4NHsiay0").strip()
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", os.environ.get("BOT_TOKEN", "8660209792:AAHhVmWhM_QrukUjs5vSQ-HeypFynaeeJjw")).strip()
 REPLICATE_TOKEN = os.environ.get("REPLICATE_API_TOKEN", "").strip()
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "").strip()
 
@@ -451,8 +451,8 @@ def extract_instagram_clean(url, unique_id):
                         media_urls.append(clean_src)
 
         downloaded = []
-        # الاكتفاء بالصورة الأولى فقط من صفحة embed لتجنب تحميل صور عشوائية من المنشورات المقترحة
-        for idx, m_url in enumerate(media_urls[:1]):
+        # تحميل صور الألبوم (بحد أقصى 10) بدلاً من صورة واحدة فقط استجابة لطلب المستخدم
+        for idx, m_url in enumerate(media_urls[:10]):
             save_path = os.path.join(DOWNLOAD_DIR, f"{unique_id}_insta_{idx}.jpg")
             r = requests.get(m_url, headers=headers, timeout=15)
             if r.status_code == 200 and len(r.content) > 5000:
@@ -1692,6 +1692,18 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
     url = url.strip()
     url = url.replace('threads.com', 'threads.net')
             
+    # تنظيف وفك الروابط المختصرة لفيسبوك لتجنب أخطاء yt-dlp
+    if 'facebook.com' in url.lower() or 'fb.watch' in url.lower() or 'fb.gg' in url.lower() or 'fb.com' in url.lower():
+        if '?' in url:
+            url = url.split('?')[0]
+        try:
+            r = requests.get(url, allow_redirects=True, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            url = r.url
+            if '?' in url:
+                url = url.split('?')[0]
+        except Exception:
+            pass
+            
     chat_id = message.chat.id if hasattr(message, 'chat') else message.from_user.id
     unique_id = uuid.uuid4().hex[:8]
     output_template = os.path.join(DOWNLOAD_DIR, f"{unique_id}_%(title).50s.%(ext)s")
@@ -1724,9 +1736,16 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                     downloaded_files = files
                     detected_type = m_type
 
-            # 2. أولوية لساحب RapidAPI تم تعطيلها ليكون التحميل بلا حدود (مجاني بالكامل)
-            if not downloaded_files and format_type != 'mp3' and ('instagram.com/p/' in url.lower() or 'instagram.com/reel/' in url.lower()):
-                pass # تم التعطيل ليتم الاعتماد على yt-dlp والسحب المباشر للصور
+            # 2. أولوية لساحب RapidAPI لضمان سحب الألبومات (Carousels) بجودة عالية
+            if not downloaded_files and format_type != 'mp3' and 'instagram.com/' in url.lower():
+                try:
+                    files, m_type = extract_instagram_rapidapi(url, unique_id)
+                    if files:
+                        downloaded_files = files
+                        detected_type = m_type
+                except Exception as e:
+                    print(f"[ERROR] RapidAPI IG failed: {e}")
+
 
             # 2.5 محاولة التحميل عبر RapidAPI (لثردز فقط)
             if not downloaded_files and 'threads.net' in url.lower():
@@ -1746,6 +1765,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                                 break # Stop at first video found
                 except Exception as e:
                     print(f"[ERROR] Threads RapidAPI Download Error: {e}")
+
 
             # 3. محرك yt-dlp المتكامل للفيديوهات والصوتيات واليوتيوب وباقي المنصات
             if not downloaded_files and 'threads.net' not in url.lower():
@@ -1768,7 +1788,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                 }
                 
                 # استخدام ملف الكوكيز إذا كان موجوداً لتجاوز حظر انستجرام
-                if os.path.exists('cookies.txt'):
+                if os.path.exists('cookies.txt') and 'youtube.com' not in url.lower() and 'youtu.be' not in url.lower():
                     ydl_opts['cookiefile'] = 'cookies.txt'
 
                 if 'instagram.com' in url or 'cdninstagram.com' in url:
@@ -1811,48 +1831,58 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                         if fname.startswith(unique_id):
                             downloaded_files.append(os.path.join(DOWNLOAD_DIR, fname))
 
-                # 4. محرك Cobalt API المساعد يوتيوب وإنستغرام وثردز
-                if not downloaded_files and ('youtube.com' in url or 'youtu.be' in url or 'instagram.com' in url or 'threads.net' in url):
-                    clean_url = url.split('?')[0] if 'instagram.com' in url or 'threads.net' in url else url
-                    
-                    # Cobalt v10 API instances (no /api/json needed)
-                    instances = [
-                        "https://co.wuk.sh/",
-                        "https://cobalt.qwy2.dev/",
-                        "https://cobalt.tools.wuk.sh/"
-                    ]
-                    
-                    for cobalt_url in instances:
-                        if downloaded_files: break
-                        try:
-                            payload = {'url': clean_url, 'downloadMode': 'audio' if format_type == 'mp3' else 'auto'}
-                            r = requests.post(cobalt_url, json=payload, headers={'Accept': 'application/json', 'Content-Type': 'application/json'}, timeout=15)
-                            if r.status_code == 200:
-                                res_json = r.json()
-                                if res_json.get('url'):
-                                    media_data = requests.get(res_json['url'], timeout=30).content
-                                    ext = ".mp3" if format_type == 'mp3' else ".mp4"
-                                    fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_cobalt{ext}")
-                                    with open(fname, 'wb') as f:
-                                        f.write(media_data)
-                                    downloaded_files.append(fname)
-                                    break
-                                elif res_json.get('status') == 'picker' and res_json.get('picker'):
-                                    for idx, item in enumerate(res_json['picker'][:10]):
-                                        m_url = item.get('url')
-                                        if m_url:
-                                            media_data = requests.get(m_url, timeout=30).content
-                                            ext = ".mp4" if item.get('type') == 'video' else ".jpg"
-                                            fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_cobalt_{idx}{ext}")
-                                            with open(fname, 'wb') as f:
-                                                f.write(media_data)
-                                            downloaded_files.append(fname)
-                                    if downloaded_files:
-                                        detected_type = 'video' if any(f.endswith('.mp4') for f in downloaded_files) else 'photo'
+                # 4. محرك Cobalt المساعد الصلب (Hardcoded) ليوتيوب وإنستغرام وثردز
+                if not downloaded_files and ('youtube.com' in url.lower() or 'youtu.be' in url.lower() or 'instagram.com' in url.lower() or 'threads.net' in url.lower()):
+                    try:
+                        clean_url = url.split('?')[0] if 'instagram.com' in url or 'threads.net' in url else url
+                        
+                        instances = [
+                            "https://cobalt.j0ntv.com/",
+                            "https://cobalt.qwy2.dev/",
+                            "https://cobalt.wests.club/",
+                            "https://co.eepy.today/",
+                            "https://cobalt.v-sec.org/",
+                            "https://cobalt.c-net.org/",
+                            "https://cobalt.zx.su/",
+                            "https://cobalt.acg.onl/",
+                            "https://cobalt.101010.top/",
+                            "https://cobalt.canine.ly/",
+                            "https://dl.khub.uk/",
+                            "https://api.cobalt.tools/"
+                        ]
+                        
+                        for cobalt_url in instances:
+                            if downloaded_files: break
+                            try:
+                                payload = {'url': clean_url, 'downloadMode': 'audio' if format_type == 'mp3' else 'auto'}
+                                r = requests.post(cobalt_url, json=payload, headers={'Accept': 'application/json', 'Content-Type': 'application/json'}, timeout=15)
+                                if r.status_code == 200:
+                                    res_json = r.json()
+                                    if res_json.get('url'):
+                                        media_data = requests.get(res_json['url'], timeout=60).content
+                                        ext = ".mp3" if format_type == 'mp3' else ".mp4"
+                                        fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_cobalt{ext}")
+                                        with open(fname, 'wb') as f:
+                                            f.write(media_data)
+                                        downloaded_files.append(fname)
                                         break
-                        except Exception as cob_err:
-                            print(f"[ERROR] Cobalt fallback ({cobalt_url}) failed: {cob_err}")
-                            continue
+                                    elif res_json.get('status') == 'picker' and res_json.get('picker'):
+                                        for idx, item in enumerate(res_json['picker'][:10]):
+                                            m_url = item.get('url')
+                                            if m_url:
+                                                media_data = requests.get(m_url, timeout=30).content
+                                                ext = ".mp4" if item.get('type') == 'video' else ".jpg"
+                                                fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_cobalt_{idx}{ext}")
+                                                with open(fname, 'wb') as f:
+                                                    f.write(media_data)
+                                                downloaded_files.append(fname)
+                                        if downloaded_files:
+                                            detected_type = 'video' if any(f.endswith('.mp4') for f in downloaded_files) else 'photo'
+                                            break
+                            except Exception as cob_err:
+                                continue
+                    except Exception as err:
+                        print(f"[ERROR] Hardcoded Cobalt fallback failed: {err}")
 
                     # 4.5. محرك VKR المساعد (Fallback إضافي لإنستغرام وثردز)
                     if not downloaded_files and ('instagram.com' in url.lower() or 'threads.net' in url.lower()):

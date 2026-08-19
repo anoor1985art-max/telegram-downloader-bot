@@ -1706,7 +1706,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
             
     chat_id = message.chat.id if hasattr(message, 'chat') else message.from_user.id
     unique_id = uuid.uuid4().hex[:8]
-    output_template = os.path.join(DOWNLOAD_DIR, f"{unique_id}_%(title).50s.%(ext)s")
+    output_template = os.path.join(DOWNLOAD_DIR, f"{unique_id}_%(title).50s_%(autonumber)s.%(ext)s")
 
     downloaded_files = []
     detected_type = 'video'
@@ -1768,7 +1768,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
 
 
             # 3. محرك yt-dlp المتكامل للفيديوهات والصوتيات واليوتيوب وباقي المنصات
-            if not downloaded_files and 'threads.net' not in url.lower() and 'instagram.com' not in url.lower():
+            if not downloaded_files and 'threads.net' not in url.lower():
                 ydl_opts = {
                     'outtmpl': output_template,
                     'ffmpeg_location': FFMPEG_PATH,

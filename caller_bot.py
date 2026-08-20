@@ -34,6 +34,9 @@ def handle_message(message):
         return
 
     clean_phone = phone.replace('+', '')
+    # Convert local Iraqi format (07...) to international format (9647...)
+    if clean_phone.startswith('07') and len(clean_phone) == 11:
+        clean_phone = '964' + clean_phone[1:]
     bot.reply_to(message, "جاري البحث في قواعد البيانات... ⏳")
 
     url = "https://caller-id-social-search-eyecon.p.rapidapi.com/search"

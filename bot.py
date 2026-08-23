@@ -1802,8 +1802,12 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                         'preferredquality': '192',
                     }]
                 else:
-                    ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+                    ydl_opts['format'] = 'bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4][vcodec^=avc]/best[ext=mp4]/best'
                     ydl_opts['merge_output_format'] = 'mp4'
+                    ydl_opts['postprocessors'] = [{
+                        'key': 'FFmpegVideoConvertor',
+                        'preferedformat': 'mp4',
+                    }]
 
                 try:
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:

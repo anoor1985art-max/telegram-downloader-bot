@@ -23,7 +23,7 @@ import imageio_ffmpeg
 # إعدادات البوت الأساسية
 # ==========================================
 from dotenv import load_dotenv
-load_dotenv('env_config.txt')
+load_dotenv('.env')
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", os.environ.get("BOT_TOKEN", "8660209792:AAHhVmWhM_QrukUjs5vSQ-HeypFynaeeJjw")).strip()
 REPLICATE_TOKEN = os.environ.get("REPLICATE_API_TOKEN", "").strip()
@@ -648,6 +648,13 @@ def handle_debug_insta(message):
 def handle_url_message(message):
     urls = URL_REGEX.findall(message.text)
     for url in urls:
+        # فلترة الروابط حسب طلب المستخدم لدعم فيسبوك، انستجرام، وتيك توك فقط
+        url_lower = url.lower()
+        supported_domains = ['facebook.com', 'fb.watch', 'fb.com', 'fb.gg', 'instagram.com', 'tiktok.com', 'douyin.com', 'vt.tiktok.com']
+        if not any(domain in url_lower for domain in supported_domains):
+            bot.reply_to(message, "❌ <b>عذراً، هذا البوت يدعم التحميل من (فيسبوك، انستجرام، تيك توك) فقط.</b>")
+            continue
+            
         status_msg = bot.reply_to(
             message,
             "⏳ <b>جاري سحب وتجهيز الفيديو بدون حقوق...</b>\n<i>يرجى الانتظار ثوانٍ معدودة ⚡</i>"
@@ -1669,29 +1676,14 @@ def extract_media_from_rapidapi_threads(data):
             urls.extend(extract_media_from_rapidapi_threads(item))
     return urls
 
-def extract_threads_rapidapi(url):
-    rapidapi_key = "97d4c0ace8msh93f3dbb2cadccd6p1afb67jsn9fe7117bcb6a"
-    api_url = "https://threads-downloader.p.rapidapi.com/v1/threads/download"
-    headers = {
-        "x-rapidapi-key": rapidapi_key,
-        "x-rapidapi-host": "threads-downloader.p.rapidapi.com",
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-    payload = {"url": url}
-    try:
-        r = requests.post(api_url, json=payload, headers=headers, timeout=20)
-        if r.status_code == 200:
-            return extract_media_from_rapidapi_threads(r.json())
-    except Exception as e:
-        print(f"[ERROR] Threads RapidAPI: {e}")
-    return []
 
 def process_and_send_download(message, status_msg, url, format_type='video'):
-    # تنظيف الرابط الأساسي
     url = url.strip()
-    url = url.replace('threads.com', 'threads.net')
-            
+    # Filter: Only allow FB, IG, TikTok
+    if not any(site in url.lower() for site in ['facebook.com', 'fb.watch', 'fb.gg', 'fb.com', 'instagram.com', 'tiktok.com', 'douyin.com']):
+        bot.edit_message_text("❌ عذراً، هذا الرابط غير مدعوم. يدعم البوت (فيسبوك، إنستغرام، تيك توك) فقط.", chat_id=message.chat.id, message_id=status_msg.message_id)
+        return
+
     # تنظيف وفك الروابط المختصرة لفيسبوك لتجنب أخطاء yt-dlp
     if 'facebook.com' in url.lower() or 'fb.watch' in url.lower() or 'fb.gg' in url.lower() or 'fb.com' in url.lower():
         if '?' in url:
@@ -1713,7 +1705,6 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
     success = False
     error_msg = "تعذر سحب الوسائط من الرابط."
 
-    # Loop for up to 5 retries if the download fails
     for attempt in range(1, 6):
         downloaded_files = []
         detected_type = 'video'
@@ -1729,14 +1720,14 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                 pass
                 
         try:
-            # 1. إذا كان تيك توك والمطلوب فيديو أو صور، نسحب عبر محرك TikWM للحصول على فيديو HD بدون حقوق نهائياً
+            # 1. إذا كان تيك توك والمطلوب فيديو أو صور، نسحب عبر محرك TikWM
             if format_type != 'mp3' and ('tiktok.com' in url.lower() or 'douyin.com' in url.lower()):
                 files, m_type = extract_tiktok_clean(url, unique_id)
                 if files:
                     downloaded_files = files
                     detected_type = m_type
 
-            # 2. أولوية لساحب RapidAPI لضمان سحب الألبومات (Carousels) بجودة عالية
+            # 2. أولوية لساحب RapidAPI لإنستغرام
             if not downloaded_files and format_type != 'mp3' and 'instagram.com/' in url.lower():
                 try:
                     files, m_type = extract_instagram_rapidapi(url, unique_id)
@@ -1746,29 +1737,8 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                 except Exception as e:
                     print(f"[ERROR] RapidAPI IG failed: {e}")
 
-
-            # 2.5 محاولة التحميل عبر RapidAPI (لثردز فقط)
-            if not downloaded_files and 'threads.net' in url.lower():
-                try:
-                    rapid_threads = extract_threads_rapidapi(url)
-                    if rapid_threads:
-                        # rapid_threads is a list of (url, type)
-                        for idx, (m_url, m_type) in enumerate(rapid_threads):
-                            media_data = requests.get(m_url, timeout=30).content
-                            ext = ".mp4" if m_type == 'video' else ".jpg"
-                            fname = os.path.join(DOWNLOAD_DIR, f"{unique_id}_rapid_threads_{idx}{ext}")
-                            with open(fname, 'wb') as f:
-                                f.write(media_data)
-                            downloaded_files.append(fname)
-                            detected_type = m_type
-                            if m_type == 'video':
-                                break # Stop at first video found
-                except Exception as e:
-                    print(f"[ERROR] Threads RapidAPI Download Error: {e}")
-
-
-            # 3. محرك yt-dlp المتكامل للفيديوهات والصوتيات واليوتيوب وباقي المنصات
-            if not downloaded_files and 'threads.net' not in url.lower():
+            # 3. محرك yt-dlp المتكامل
+            if not downloaded_files:
                 ydl_opts = {
                     'outtmpl': output_template,
                     'ffmpeg_location': FFMPEG_PATH,
@@ -1787,8 +1757,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                     }
                 }
                 
-                # استخدام ملف الكوكيز إذا كان موجوداً لتجاوز حظر انستجرام
-                if os.path.exists('cookies.txt') and 'youtube.com' not in url.lower() and 'youtu.be' not in url.lower():
+                if os.path.exists('cookies.txt'):
                     ydl_opts['cookiefile'] = 'cookies.txt'
 
                 if 'instagram.com' in url or 'cdninstagram.com' in url:
@@ -1828,7 +1797,7 @@ def process_and_send_download(message, status_msg, url, format_type='video'):
                                 if os.path.exists(fname):
                                     downloaded_files.append(fname)
                 except Exception as yt_err:
-                    print(f"[WARNING] yt-dlp downloader mobile client failed: {yt_err}")
+                    print(f"[WARNING] yt-dlp downloader failed: {yt_err}")
 
                 if not downloaded_files:
                     for fname in os.listdir(DOWNLOAD_DIR):

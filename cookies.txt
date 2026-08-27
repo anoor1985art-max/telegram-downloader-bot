@@ -1,4 +1,4 @@
-# Netscape HTTP Cookie File
+﻿# Netscape HTTP Cookie File
 # https://curl.haxx.se/rfc/cookie_spec.html
 # This is a generated file! Do not edit.
 
@@ -7,9 +7,20 @@
 .instagram.com	TRUE	/	TRUE	1803213382	mid	aWuCRgALAAFQwaEYqhpa_vwjx8ug
 .instagram.com	TRUE	/	TRUE	1803959930	ps_l	1
 .instagram.com	TRUE	/	TRUE	1803959930	ps_n	1
-.instagram.com	TRUE	/	TRUE	1786929246	dpr	1.25
-.instagram.com	TRUE	/	TRUE	1820884467	csrftoken	kObCU68qY873yAXus8GX9vNdqi6BZjpC
-.instagram.com	TRUE	/	TRUE	1794100467	ds_user_id	42673267070
-.instagram.com	TRUE	/	TRUE	1817860437	sessionid	42673267070%3AQQuA3UgD9a5XAE%3A28%3AAYgt-iZXrH9nr1i7Xd1GqqcrUoW1kd_xVKdnUWKUEg
-.instagram.com	TRUE	/	TRUE	0	rur	CLN%2C17841442572124158%2C1787534371%3A01ffa8fa894be611067f98e382709236d06d392849169995481a7de47aabe8698decfd81
-.instagram.com	TRUE	/	TRUE	1786929578	wd	1536x695
+.instagram.com	TRUE	/	TRUE	1788475893	dpr	1.25
+.instagram.com	TRUE	/	TRUE	1788475893	wd	1536x695
+.instagram.com	TRUE	/	TRUE	1822431091	csrftoken	mkSORTProh7EsGv2VchB8fKPTnRW1QtW
+.instagram.com	TRUE	/	TRUE	1795647091	ds_user_id	42673267070
+.instagram.com	TRUE	/	TRUE	1819407090	sessionid	42673267070%3A5cl94CWilCOsN3%3A3%3AAYjh6fVPwvy4ZB8i2kExLBuh8Q166DulYoMdeoV1hw
+.instagram.com	TRUE	/	TRUE	0	rur	NCG%2C17841442572124158%2C1789080697%3A01ff2797864a205da6f9ebcb5e82aa9e3cc3530f11e68b3edc35932419f47b9a0338bedb
+
+.facebook.com	TRUE	/	TRUE	1803942650	datr	zsBGaRi9UdcGsoYcEBj8Fp1m
+.facebook.com	TRUE	/	TRUE	1822430930	sb	2sBGab0T-09_TA3_zkp2maFl
+.facebook.com	TRUE	/	TRUE	1803204638	ps_l	1
+.facebook.com	TRUE	/	TRUE	1803204638	ps_n	1
+.facebook.com	TRUE	/	TRUE	1788475802	wd	1536x695
+.facebook.com	TRUE	/	TRUE	1788475802	dpr	1.25
+.facebook.com	TRUE	/	TRUE	1819406994	c_user	61593839103866
+.facebook.com	TRUE	/	TRUE	1819406994	xs	40%3AEdkkFOA5ZTBiuQ%3A2%3A1787870928%3A-1%3A-1%3A%3AAczLJDFkeol6rB47SoFyFHVk0Mv6ldE6KdqnFgFpGA
+.facebook.com	TRUE	/	TRUE	1795646994	fr	1DPuFIHZVUXyhebrN.AWfPCMkfkuNqIShoTnuX7U31J8bPCvWOGAMCGOGngXIpwQqJM7A.BqkL8O..AAA.0.0.BqkL8R.AWc6bS7_f1kNbtOOFhnsfg5RO6k
+.facebook.com	TRUE	/	TRUE	0	presence	C%7B%22t3%22%3A%5B%5D%2C%22utc3%22%3A1787871002639%2C%22v%22%3A1%7D

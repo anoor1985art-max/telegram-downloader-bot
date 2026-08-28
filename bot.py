@@ -2097,9 +2097,24 @@ def check_and_update_ytdl():
     except Exception as e:
         print(f"[WARNING] Failed to update yt-dlp: {e}")
 
+def keep_awake():
+    import requests
+    url = os.environ.get("RENDER_EXTERNAL_URL", "https://srv-da1oilijnfac739tqnvg.onrender.com")
+    while True:
+        try:
+            requests.get(url)
+            print(f"[INFO] Pinged {url} to keep Render awake.")
+        except Exception as e:
+            print(f"[WARNING] Ping failed: {e}")
+        time.sleep(14 * 60) # 14 دقائق
+
 # تشغيل البوت في مسار منفصل (Background Thread) ليعمل سواء عبر python مباشرة أو عبر gunicorn في السحابة
 polling_thread = threading.Thread(target=run_bot_polling, daemon=True)
 polling_thread.start()
+
+# تشغيل مسار إبقاء السيرفر مستيقظاً (Self-pinging)
+keep_awake_thread = threading.Thread(target=keep_awake, daemon=True)
+keep_awake_thread.start()
 
 if __name__ == "__main__":
     print("[INFO] Universal Downloader Bot is starting... Connected to Telegram successfully.")
